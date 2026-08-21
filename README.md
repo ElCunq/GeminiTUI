@@ -1,5 +1,7 @@
 # ⚡ GeminiTUI
 
+🌐 **[Türkçe](README.md)** │ **[English](README_EN.md)**
+
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Textual](https://img.shields.io/badge/TUI-Textual-green.svg)](https://textual.textualize.io/)
 [![Google Gemini](https://img.shields.io/badge/AI-Google%20Gemini%203.7%20Flash-orange.svg)](https://gemini.google.com/)
