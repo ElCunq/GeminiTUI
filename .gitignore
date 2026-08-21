@@ -1,0 +1,29 @@
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Environments
+env/
+venv/
+.venv/
+ENV/
+
+# Local Caches & Exports
+.cache/
+*.png
+*.jpg
+*.jpeg
+Gemini_Sohbet_*.md
+
+# Environment Credentials (DO NOT COMMIT COOKIES)
+.env
+.env.local
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

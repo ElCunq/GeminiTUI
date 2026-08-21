@@ -1,0 +1,6 @@
+textual>=0.50.0
+rich>=13.0.0
+Pillow>=10.0.0
+gemini-webapi>=1.5.0
+loguru
+curl_cffi
