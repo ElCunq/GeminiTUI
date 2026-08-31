@@ -14,7 +14,7 @@ from typing import List, Optional, Dict, Any, Union
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, Container
-from textual.widgets import ListView, ListItem, Label, Input, RichLog, Button
+from textual.widgets import ListView, ListItem, Label, Input, RichLog, Button, TextArea
 from textual.binding import Binding
 from textual.events import Key, Click
 from textual import work
@@ -223,6 +223,16 @@ def parse_cookie_input(raw_text: str):
             
     return psid, psidts, psidcc
 
+# --- ÇOK SATIRLI ÇOKLU GİRDİ VE BELİRGİN İMLEÇ (TEXTAREA) ---
+class PromptTextArea(TextArea):
+    def _on_key(self, event: Key) -> None:
+        if event.key == "enter" and not event.shift:
+            event.prevent_default()
+            event.stop()
+            self.app.handle_prompt_submit()
+        else:
+            super()._on_key(event)
+
 class NakedGeminiTUI(App):
     BINDINGS = [
         Binding("ctrl+c", "quit", "Çıkış", priority=True),
@@ -392,35 +402,39 @@ class NakedGeminiTUI(App):
     /* ALT GİRDİ ÇUBUĞU (INPUT BAR) */
     #input-container {
         dock: bottom;
-        height: 1;
+        height: 3;
         layout: horizontal;
+        border-top: solid #00ffcc;
     }
     #add-file-btn {
         width: 5;
-        height: 1;
+        height: 3;
         color: #00ffcc;
         text-style: bold;
     }
-    #message-input { 
+    #prompt-text-area { 
         width: 1fr;
-        height: 1;
+        height: 3;
         padding: 0; 
         margin: 0; 
+        border: none;
+        cursor-background: #00ffcc;
+        cursor-color: #000000;
     }
     #model-select-btn {
         width: 14;
-        height: 1;
+        height: 3;
         color: #00ffcc;
         text-style: bold;
     }
     #voice-btn {
         width: 5;
-        height: 1;
+        height: 3;
         color: #ffaa00;
     }
     #send-stop-btn {
         width: 14;
-        height: 1;
+        height: 3;
         color: #00ffcc;
         text-style: bold;
     }
@@ -494,6 +508,7 @@ class NakedGeminiTUI(App):
                 
                 with Horizontal(id="chat-action-buttons"):
                     yield Button("[📋 Kopyala]", id="act-copy-btn", classes="action-btn")
+                    yield Button("[🔍 Metni İncele]", id="act-inspect-btn", classes="action-btn")
                     yield Button("[🔄 Yeniden Oluştur]", id="act-retry-btn", classes="action-btn")
                     yield Button("[✏️ Düzenle]", id="act-edit-btn", classes="action-btn")
 
@@ -506,12 +521,14 @@ class NakedGeminiTUI(App):
                 
                 with Horizontal(id="input-container"):
                     yield Button("[+]", id="add-file-btn")
-                    yield Input(placeholder="Promptunuzu yazın...", id="message-input")
+                    ta = PromptTextArea(id="prompt-text-area")
+                    ta.cursor_blink = True
+                    yield ta
                     yield Button("[Flash ▾]", id="model-select-btn")
                     yield Button("[🎙️]", id="voice-btn")
                     yield Button("[ Gönder ⏎ ]", id="send-stop-btn")
                 
-        yield Label("Gemini bir yapay zeka modeli olduğu için hata yapabilir. │ F1: Yeni │ F2: Model │ F3: Dosya │ Alt+C: Kopyala │ Alt+V: Görsel", id="footer-bar")
+        yield Label("💡 İpucu: Fareyle metin kopyalamak için: Shift + Sol Tık Sürükle │ F1: Yeni │ F2: Model │ F3: Dosya │ Alt+C: Kopyala │ Alt+V: Görsel", id="footer-bar")
 
     def on_mount(self) -> None:
         if self.all_chats_cache:
@@ -523,6 +540,122 @@ class NakedGeminiTUI(App):
         
         # YÖNTEM A: Saf HTTP Heartbeat Motoru
         self._heartbeat_task = asyncio.create_task(self.start_http_heartbeat_loop())
+
+    # --- PROMPT SUBMIT HANDLER (ENTER VEYA GÖNDER BUTTON) ---
+    def handle_prompt_submit(self) -> None:
+        ta = self.query_one("#prompt-text-area", PromptTextArea)
+        text = ta.text.strip()
+        if not text:
+            return
+
+        ta.text = ""
+        self.query_one("#command-suggestions", ListView).display = False
+
+        if text == "/login":
+            self.trigger_auto_browser_login()
+            return
+
+        if text.startswith("/login "):
+            raw_input = text.split(" ", 1)[1].strip()
+            chat_log = self.query_one("#chat-log", RichLog)
+            
+            psid, psidts, psidcc = parse_cookie_input(raw_input)
+            if psid:
+                save_cookie_credentials(psid, psidts, psidcc)
+                chat_log.write(Markdown("🔑 **Çerezler otomatik ayıklandı ve kaydedildi! Hesaba yeniden bağlanılıyor...**"))
+                chat_log.write("\n")
+                chat_log.scroll_end(animate=False)
+                self.connect_to_gemini()
+            else:
+                self.trigger_auto_browser_login()
+            return
+
+        if text.startswith("/import "):
+            fpath = text.split(" ", 1)[1].strip()
+            self.action_import_chat(fpath)
+            return
+
+        if text.startswith("/export") or text.startswith("/save"):
+            parts = text.split(" ", 1)
+            fname = parts[1].strip() if len(parts) > 1 else ""
+            self.action_export_chat(fname)
+            return
+
+        if text.startswith("/view"):
+            parts = text.split(" ", 1)
+            target = parts[1].strip() if len(parts) > 1 else None
+            self.action_open_last_generated_image(target)
+            return
+
+        if text.startswith("/file ") or text.startswith("/upload "):
+            filepath_str = text.split(" ", 1)[1].strip()
+            clean_path = Path(filepath_str.strip("'\"")).expanduser()
+            if clean_path.exists():
+                self.attached_files.append(str(clean_path))
+                self.update_attachments_bar()
+                chat_log = self.query_one("#chat-log", RichRichLog if False else RichLog)
+                chat_log.write(Markdown(f"📎 **Dosya eklendi:** `{clean_path.name}` (`{clean_path}`)"))
+                chat_log.write("\n")
+                chat_log.scroll_end(animate=False)
+            else:
+                chat_log = self.query_one("#chat-log", RichLog)
+                chat_log.write(Markdown(f"⚠️ **Dosya bulunamadı:** `{filepath_str}`"))
+                chat_log.write("\n")
+                chat_log.scroll_end(animate=False)
+            return
+
+        if text == "/copy":
+            self.action_copy_last_response()
+            return
+
+        if text == "/new":
+            self.action_new_chat()
+            return
+
+        if text in ["/model", "/models"]:
+            if self.available_models:
+                self.action_cycle_model()
+            return
+
+        if text == "/delete":
+            self.action_delete_chat()
+            return
+
+        if text in ["/help", "/yardim"]:
+            self.action_show_help()
+            return
+
+        if text in ["/exit", "/quit"]:
+            self.exit()
+            return
+
+        if not self.active_chat:
+            return
+
+        # AGY STYLE COMPACT PASTE DISPLAY ([📋 Yapıştırılan Metin: +X Satır])
+        self.last_user_prompt = text
+        chat_log = self.query_one("#chat-log", RichLog)
+        
+        lines = text.split("\n")
+        file_names_str = ""
+        if self.attached_files:
+            names = ", ".join(Path(f).name for f in self.attached_files)
+            file_names_str = f" `[📎 {names}]`"
+
+        if len(lines) > 3 or len(text) > 250:
+            preview = "\n".join(lines[:2])
+            chat_log.write(Markdown(f"**Sen:** `[📋 Yapıştırılan Metin (+{len(lines)} Satır)]`{file_names_str}\n\n> {preview}\n\n*... (Toplam {len(text)} karakter)*"))
+        else:
+            chat_log.write(Markdown(f"**Sen:** {text}{file_names_str}"))
+
+        chat_log.write("\n")
+        chat_log.scroll_end(animate=False)
+
+        files_to_send = list(self.attached_files) if self.attached_files else None
+        self.attached_files.clear()
+        self.update_attachments_bar()
+
+        self.send_message_to_gemini(text, files=files_to_send)
 
     # --- HTTP HEARTBEAT MOTORU (0 MB RAM / 0 MB DISK / %0 CPU) ---
     async def start_http_heartbeat_loop(self) -> None:
@@ -564,15 +697,18 @@ class NakedGeminiTUI(App):
         elif btn_id == "act-copy-btn":
             self.action_copy_last_response()
 
+        elif btn_id == "act-inspect-btn":
+            self.action_inspect_last_response()
+
         elif btn_id == "act-retry-btn":
             if self.last_user_prompt and self.active_chat:
                 self.send_message_to_gemini(self.last_user_prompt)
 
         elif btn_id == "act-edit-btn":
             if self.last_user_prompt:
-                msg_input = self.query_one("#message-input", Input)
-                msg_input.value = self.last_user_prompt
-                msg_input.focus()
+                ta = self.query_one("#prompt-text-area", PromptTextArea)
+                ta.text = self.last_user_prompt
+                ta.focus()
 
         elif btn_id == "add-file-btn":
             self.action_prompt_file()
@@ -584,10 +720,19 @@ class NakedGeminiTUI(App):
             if self.is_generating_stream:
                 self.stop_generating_stream()
             else:
-                msg_input = self.query_one("#message-input", Input)
-                val = msg_input.value.strip()
-                if val:
-                    self.on_input_submitted(Input.Submitted(msg_input, val))
+                self.handle_prompt_submit()
+
+    def action_inspect_last_response(self) -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        if not self.last_gemini_response:
+            chat_log.write(Markdown("⚠️ **İncelenecek yanıt bulunamadı.**"))
+            chat_log.write("\n")
+            chat_log.scroll_end(animate=False)
+            return
+
+        chat_log.write(Markdown(f"🔍 **Seçilebilir Tam Yanıt Görünümü:**\n\n```markdown\n{self.last_gemini_response}\n```"))
+        chat_log.write("\n---\n")
+        chat_log.scroll_end(animate=False)
 
     def stop_generating_stream(self) -> None:
         self.is_generating_stream = False
@@ -685,19 +830,6 @@ class NakedGeminiTUI(App):
             chat_log.write("\n")
         chat_log.scroll_end(animate=False)
 
-    # --- YUKARI OK İLE SON MESAJI GERİ ÇAĞIRMA ---
-    def on_key(self, event: Key) -> None:
-        if event.key == "up":
-            try:
-                msg_input = self.query_one("#message-input", Input)
-                if msg_input.is_focused and not msg_input.value.strip() and self.last_user_prompt:
-                    msg_input.value = self.last_user_prompt
-                    msg_input.cursor_position = len(msg_input.value)
-                    event.prevent_default()
-                    event.stop()
-            except Exception:
-                pass
-
     def select_default_model_flash_37(self) -> None:
         if not self.available_models:
             return
@@ -781,7 +913,6 @@ class NakedGeminiTUI(App):
     def trigger_auto_browser_login(self) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
         
-        # Native Linux Cookie Taramasını Dene
         native_cookies = auto_extract_native_linux_cookies()
         if native_cookies.get("__Secure-1PSID"):
             psid = native_cookies.get("__Secure-1PSID")
@@ -978,16 +1109,6 @@ class NakedGeminiTUI(App):
             self._search_task = asyncio.create_task(self._debounced_search(filter_query))
             return
 
-        if event.input.id == "message-input":
-            val = event.value.strip()
-            popup = self.query_one("#command-suggestions", ListView)
-            
-            if val.startswith("/"):
-                query = val.lower()
-                asyncio.create_task(self.render_command_popup(query))
-            else:
-                popup.display = False
-
     async def _debounced_search(self, query: str) -> None:
         await asyncio.sleep(0.04)
         await self.render_chat_list(self.all_chats_cache, filter_query=query)
@@ -1103,20 +1224,20 @@ class NakedGeminiTUI(App):
         if list_id == "command-suggestions":
             cmd = getattr(event.item, "command_str", None)
             if cmd:
-                msg_input = self.query_one("#message-input", Input)
+                ta = self.query_one("#prompt-text-area", PromptTextArea)
                 if cmd in ["/file <yol>", "/upload <yol>"]:
-                    msg_input.value = "/file "
+                    ta.text = "/file "
                 elif cmd == "/rename <başlık>":
-                    msg_input.value = "/rename "
+                    ta.text = "/rename "
                 elif cmd == "/login [Çerez]":
-                    msg_input.value = "/login "
+                    ta.text = "/login "
                 elif cmd in ["/import <dosya>", "/export <dosya>"]:
-                    msg_input.value = cmd.split()[0] + " "
+                    ta.text = cmd.split()[0] + " "
                 elif cmd == "/view":
-                    msg_input.value = "/view"
+                    ta.text = "/view"
                 else:
-                    msg_input.value = cmd
-                msg_input.focus()
+                    ta.text = cmd
+                ta.focus()
                 self.query_one("#command-suggestions", ListView).display = False
             return
 
@@ -1125,7 +1246,7 @@ class NakedGeminiTUI(App):
             if chat_id:
                 title = getattr(event.item, "title_text", "Sohbet")
                 self.load_historical_chat(chat_id, title)
-                self.query_one("#message-input", Input).focus()
+                self.query_one("#prompt-text-area", PromptTextArea).focus()
 
     # --- SOHBETİ DISA AKTARMA (/export) ---
     def action_export_chat(self, filename: str = "") -> None:
@@ -1235,9 +1356,9 @@ class NakedGeminiTUI(App):
         chat_log.scroll_end(animate=False)
 
     def action_prompt_file(self) -> None:
-        msg_input = self.query_one("#message-input", Input)
-        msg_input.value = "/file "
-        msg_input.focus()
+        ta = self.query_one("#prompt-text-area", PromptTextArea)
+        ta.text = "/file "
+        ta.focus()
 
     @work(exclusive=True)
     async def action_delete_chat(self) -> None:
@@ -1256,6 +1377,9 @@ class NakedGeminiTUI(App):
         chat_log = self.query_one("#chat-log", RichLog)
         help_md = (
             "### 💡 KULLANIM VE KOMUT YARDIMI\n\n"
+            "- **Enter** : Mesajı gönderir.\n"
+            "- **Shift+Enter** : Girdi alanında alt satıra geçer.\n"
+            "- **Shift + Sol Tık Sürükle** : Terminal içinden doğrudan metin seçip kopyalar.\n"
             "- **F1** veya **Alt+N** veya `/new` : Yeni sohbet başlatır.\n"
             "- **F2** veya **Alt+M** veya `/model` : AI Modelleri arasında geçiş yapar.\n"
             "- **F3** veya **Alt+F** veya `/file <yol>` : Görsel (PNG/JPG/WEBP), PDF veya metin dosyası ekler.\n"
@@ -1274,118 +1398,6 @@ class NakedGeminiTUI(App):
         )
         chat_log.write(Markdown(help_md))
         chat_log.scroll_end(animate=False)
-
-    # --- INPUT VE MESAJ GÖNDERİMİ ---
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id != "message-input":
-            return
-            
-        text = event.value.strip()
-        if not text:
-            return
-
-        self.query_one("#message-input", Input).value = ""
-        self.query_one("#command-suggestions", ListView).display = False
-
-        if text == "/login":
-            self.trigger_auto_browser_login()
-            return
-
-        if text.startswith("/login "):
-            raw_input = text.split(" ", 1)[1].strip()
-            chat_log = self.query_one("#chat-log", RichLog)
-            
-            psid, psidts, psidcc = parse_cookie_input(raw_input)
-            if psid:
-                save_cookie_credentials(psid, psidts, psidcc)
-                chat_log.write(Markdown("🔑 **Çerezler otomatik ayıklandı ve kaydedildi! Hesaba yeniden bağlanılıyor...**"))
-                chat_log.write("\n")
-                chat_log.scroll_end(animate=False)
-                self.connect_to_gemini()
-            else:
-                self.trigger_auto_browser_login()
-            return
-
-        if text.startswith("/import "):
-            fpath = text.split(" ", 1)[1].strip()
-            self.action_import_chat(fpath)
-            return
-
-        if text.startswith("/export") or text.startswith("/save"):
-            parts = text.split(" ", 1)
-            fname = parts[1].strip() if len(parts) > 1 else ""
-            self.action_export_chat(fname)
-            return
-
-        if text.startswith("/view"):
-            parts = text.split(" ", 1)
-            target = parts[1].strip() if len(parts) > 1 else None
-            self.action_open_last_generated_image(target)
-            return
-
-        if text.startswith("/file ") or text.startswith("/upload "):
-            filepath_str = text.split(" ", 1)[1].strip()
-            clean_path = Path(filepath_str.strip("'\"")).expanduser()
-            if clean_path.exists():
-                self.attached_files.append(str(clean_path))
-                self.update_attachments_bar()
-                chat_log = self.query_one("#chat-log", RichLog)
-                chat_log.write(Markdown(f"📎 **Dosya eklendi:** `{clean_path.name}` (`{clean_path}`)"))
-                chat_log.write("\n")
-                chat_log.scroll_end(animate=False)
-            else:
-                chat_log = self.query_one("#chat-log", RichLog)
-                chat_log.write(Markdown(f"⚠️ **Dosya bulunamadı:** `{filepath_str}`"))
-                chat_log.write("\n")
-                chat_log.scroll_end(animate=False)
-            return
-
-        if text == "/copy":
-            self.action_copy_last_response()
-            return
-
-        if text == "/new":
-            self.action_new_chat()
-            return
-
-        if text in ["/model", "/models"]:
-            if self.available_models:
-                self.action_cycle_model()
-            return
-
-        if text == "/delete":
-            self.action_delete_chat()
-            return
-
-        if text in ["/help", "/yardim"]:
-            self.action_show_help()
-            return
-
-        if text in ["/exit", "/quit"]:
-            self.exit()
-            return
-
-        if not self.active_chat:
-            return
-
-        # Normal Mesaj Gönderimi
-        self.last_user_prompt = text
-        chat_log = self.query_one("#chat-log", RichLog)
-        
-        file_names_str = ""
-        if self.attached_files:
-            names = ", ".join(Path(f).name for f in self.attached_files)
-            file_names_str = f" `[📎 {names}]`"
-
-        chat_log.write(Markdown(f"**Sen:** {text}{file_names_str}"))
-        chat_log.write("\n")
-        chat_log.scroll_end(animate=False)
-
-        files_to_send = list(self.attached_files) if self.attached_files else None
-        self.attached_files.clear()
-        self.update_attachments_bar()
-
-        self.send_message_to_gemini(text, files=files_to_send)
 
     # ⚡ TEMİZ AKICI MESAJLAŞMA MOTORU
     @work(exclusive=True)
