@@ -6,6 +6,7 @@ import asyncio
 import pathlib
 import subprocess
 import shutil
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Union
@@ -49,7 +50,7 @@ COMMANDS_LIST = [
     ("/help", "Kullanım yardımını ve komut listesini gösterir"),
     ("/new", "Yeni temiz bir sohbet başlatır"),
     ("/model", "AI modelleri arasında geçiş yapar (3.7 Flash, 3.1 Pro, 3.5 Flash-Lite)"),
-    ("/login [çerez_metni]", "Kopyalanan çerez metnini yapıştırıp anında oturum açar"),
+    ("/login", "Tarayıcıyı otomatik açıp Google hesabınıza 0-tık ile bağlanır"),
     ("/export <dosya>", "Aktif sohbeti Markdown (.md) dosyası olarak kaydeder"),
     ("/import <dosya>", "Kaydedilmiş sohbet dosyasını yükler ve bağlamı canlı oturuma aktarır"),
     ("/file <yol>", "Görsel (PNG/JPG/WEBP), PDF veya kod/metin dosyası ekler (F3/Alt+F)"),
@@ -111,7 +112,6 @@ def parse_cookie_input(raw_text: str):
     psidts = psidts_m.group(1) if psidts_m else None
     psidcc = psidcc_m.group(1) if psidcc_m else None
     
-    # Eğer özel regex eşleşmediyse boşlukla ayrılmış parametreleri dene: /login val1 val2
     if not psid:
         clean = raw_text.replace("/login", "").strip()
         parts = clean.split()
@@ -427,7 +427,78 @@ class NakedGeminiTUI(App):
             bar.update("")
             bar.display = False
 
-    # --- GEMINI CLIENT VE ARKA PLAN BAĞLANTISI (OTOMATİK BROWSER KONTROLÜ DAHİL) ---
+    # 🚀 OTOMATİK TARAYICI AÇIP 0-TIK ÇEREZ ALGILAYAN OTURUM SİSTEMİ
+    def trigger_auto_browser_login(self) -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        chat_log.write(Markdown(
+            "🌐 **Varsayılan tarayıcınızda [gemini.google.com](https://gemini.google.com) adresi açılıyor...**\n\n"
+            "⏳ *Lütfen açılan tarayıcı penceresinde Google hesabınızın açık olduğundan emin olun. Oturumunuz arka planda otomatik olarak taranıyor (30 saniye)...*"
+        ))
+        chat_log.write("\n")
+        chat_log.scroll_end(animate=False)
+
+        try:
+            webbrowser.open("https://gemini.google.com")
+        except Exception:
+            pass
+
+        self._poll_auto_login()
+
+    @work(exclusive=True, group="login_poll")
+    async def _poll_auto_login(self) -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        
+        for attempt in range(1, 16):
+            await asyncio.sleep(2)
+            try:
+                test_client = GeminiClient(auto_cookies=True)
+                await test_client.init(timeout=8, auto_close=False, auto_refresh=True)
+                cookie_src = getattr(test_client, "_cookie_source", "Guest")
+                
+                if cookie_src != "Guest":
+                    self.client = test_client
+                    models = self.client.list_models()
+                    if models:
+                        real_avail = [m for m in models if getattr(m, "is_available", True)]
+                        if real_avail:
+                            self.available_models = real_avail
+                    
+                    self.select_default_model_flash_37()
+                    selected_model = self.available_models[self.active_model_idx] if self.available_models else None
+                    self.active_chat = self.client.start_chat(model=selected_model)
+                    
+                    # Bulunan tarayıcı çerezlerini kalıcı kaydedelim
+                    try:
+                        cookies_dict = getattr(self.client, "_cookies", {}) or {}
+                        psid = cookies_dict.get("__Secure-1PSID") or cookies_dict.get("1PSID")
+                        psidts = cookies_dict.get("__Secure-1PSIDTS") or cookies_dict.get("1PSIDTS")
+                        psidcc = cookies_dict.get("__Secure-1PSIDCC") or cookies_dict.get("1PSIDCC")
+                        if psid:
+                            save_cookie_credentials(psid, psidts, psidcc)
+                    except Exception:
+                        pass
+
+                    self.update_header_status()
+                    self.update_chat_info_bar()
+                    
+                    chat_log.write(Markdown(f"🎉 **Tebrikler!** Google hesabınız `{cookie_src}` üzerinden **otomatik olarak algılandı ve bağlandı!**"))
+                    chat_log.write("\n---\n")
+                    chat_log.scroll_end(animate=False)
+                    
+                    self.sync_chats_from_server_bg()
+                    return
+            except Exception:
+                pass
+
+        chat_log.write(Markdown(
+            "⚠️ **Oturum otomatik algılanamadı.**\n\n"
+            "Dilerseniz tarayıcıdan kopyaladığınız metni doğrudan yapıştırabilirsiniz:\n"
+            "`/login kopyalanan_metin`"
+        ))
+        chat_log.write("\n")
+        chat_log.scroll_end(animate=False)
+
+    # --- GEMINI CLIENT VE ARKA PLAN BAĞLANTISI ---
     @work(exclusive=True)
     async def connect_to_gemini(self) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
@@ -438,7 +509,6 @@ class NakedGeminiTUI(App):
             if psidcc:
                 kwargs["secure_1psidcc"] = psidcc
                 
-            # Eğer kayıtlı çerez varsa onunla başla, yoksa bilgisayardaki tarayıcılardan (auto_cookies=True) otomatik bulmayı dene
             self.client = GeminiClient(
                 secure_1psid=psid,
                 secure_1psidts=psidts,
@@ -463,20 +533,9 @@ class NakedGeminiTUI(App):
             
             cookie_source = getattr(self.client, "_cookie_source", "")
             if cookie_source == "Guest":
-                login_guide = (
-                    "🟡 **Hesap Oturumu Açılmadı (Misafir Modu)**\n\n"
-                    "Google hesabınızdaki sohbet geçmişinize erişmek ve kısıtlamasız bağlanmak için **en kolay oturum yöntemi**:\n\n"
-                    "1. Tarayıcınızda [gemini.google.com](https://gemini.google.com) sekmesini açın.\n"
-                    "2. Geliştirici Araçları'ndan (F12 ➔ Network/Ağ) kopyaladığınız **Cookie** metnini veya `__Secure-1PSID` değerini kopyalayın.\n"
-                    "3. Aşağıdaki mesaj kutusuna kopyaladığınız metni doğrudan yapıştırıp gönderin:\n"
-                    "   `/login kopyalanan_metin`\n\n"
-                    "*(Sistem kopyaladığınız metnin içindeki çerezleri otomatik ayıklayıp anında giriş yapacaktır!)*"
-                )
-                chat_log.write(Markdown(login_guide))
-                chat_log.write("\n---\n")
-                chat_log.scroll_end(animate=False)
-            
-            self.sync_chats_from_server_bg()
+                self.trigger_auto_browser_login()
+            else:
+                self.sync_chats_from_server_bg()
         except Exception as e:
             self.update_header_status()
             self.update_chat_info_bar()
@@ -696,8 +755,8 @@ class NakedGeminiTUI(App):
                     msg_input.value = "/file "
                 elif cmd == "/rename <başlık>":
                     msg_input.value = "/rename "
-                elif cmd == "/login [çerez_metni]":
-                    msg_input.value = "/login "
+                elif cmd == "/login":
+                    msg_input.value = "/login"
                 elif cmd in ["/import <dosya>", "/export <dosya>"]:
                     msg_input.value = cmd.split()[0] + " "
                 elif cmd == "/view":
@@ -979,7 +1038,7 @@ class NakedGeminiTUI(App):
             "- **F1** veya **Alt+N** veya `/new` : Yeni sohbet başlatır.\n"
             "- **F2** veya **Alt+M** veya `/model` : AI Modelleri arasında geçiş yapar.\n"
             "- **F3** veya **Alt+F** veya `/file <yol>` : Görsel (PNG/JPG/WEBP), PDF veya metin dosyası ekler.\n"
-            "- `/login [çerez_metni]` : Tarayıcıdan kopyalanan çerez metnini yapıştırıp oturum açar.\n"
+            "- `/login` : Varsayılan tarayıcıyı açıp Google hesabınıza 0-tık ile otomatik bağlanır.\n"
             "- `/export <dosya>` : Aktif sohbeti Markdown (.md) dosyası olarak kaydeder.\n"
             "- `/import <dosya>` : Kaydedilmiş sohbet dosyasını yükler ve canlı oturum bağlamına aktarır.\n"
             "- **F4** veya **Alt+D** veya `/delete` : Aktif sohbeti hesabınızdan siler.\n"
@@ -1007,22 +1066,14 @@ class NakedGeminiTUI(App):
         self.query_one("#message-input", Input).value = ""
         self.query_one("#command-suggestions", ListView).display = False
 
-        if text.startswith("/login"):
-            raw_input = text.split(" ", 1)[1].strip() if " " in text else ""
+        if text == "/login":
+            self.trigger_auto_browser_login()
+            return
+
+        if text.startswith("/login "):
+            raw_input = text.split(" ", 1)[1].strip()
             chat_log = self.query_one("#chat-log", RichLog)
             
-            if not raw_input:
-                guide_text = (
-                    "💡 **Çerez Yapıştırma Yöntemi:**\n\n"
-                    "1. Tarayıcınızda [gemini.google.com](https://gemini.google.com) sekmesindeyken `F12` basın (Ağ/Network sekmesi).\n"
-                    "2. Herhangi bir isteğin üzerindeki **Cookie:** başlığını veya `__Secure-1PSID` kopyalayın.\n"
-                    "3. Buraya doğrudan yapıştırın: `/login <kopyaladığınız_metin>`"
-                )
-                chat_log.write(Markdown(guide_text))
-                chat_log.write("\n")
-                chat_log.scroll_end(animate=False)
-                return
-
             psid, psidts, psidcc = parse_cookie_input(raw_input)
             if psid:
                 save_cookie_credentials(psid, psidts, psidcc)
@@ -1031,9 +1082,7 @@ class NakedGeminiTUI(App):
                 chat_log.scroll_end(animate=False)
                 self.connect_to_gemini()
             else:
-                chat_log.write(Markdown("⚠️ **Çerez ayıklanamadı.** Lütfen yapıştırdığınız metinde `__Secure-1PSID=` geçtiğinden emin olun."))
-                chat_log.write("\n")
-                chat_log.scroll_end(animate=False)
+                self.trigger_auto_browser_login()
             return
 
         if text.startswith("/import "):
