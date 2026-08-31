@@ -418,8 +418,9 @@ class NakedGeminiTUI(App):
         padding: 0; 
         margin: 0; 
         border: none;
-        cursor-background: #00ffcc;
-        cursor-color: #000000;
+    }
+    #prompt-text-area:focus {
+        border: solid #00ffcc;
     }
     #model-select-btn {
         width: 14;
