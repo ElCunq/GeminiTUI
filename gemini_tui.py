@@ -12,10 +12,10 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any, Union
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import ListView, ListItem, Label, Input, RichLog
+from textual.containers import Horizontal, Vertical, Container
+from textual.widgets import ListView, ListItem, Label, Input, RichLog, Button
 from textual.binding import Binding
-from textual.events import Key
+from textual.events import Key, Click
 from textual import work
 
 from rich.markdown import Markdown
@@ -30,7 +30,7 @@ from gemini_webapi import GeminiClient
 from gemini_webapi.types.availablemodel import AvailableModel
 from gemini_webapi.utils import set_log_level, logger, rotate_1psidts, clear_cookies_cache
 
-# Terminal log kirliliğini tamamen kapatıyoruz
+# Terminal kirliliğini önlemek için log seviyesini ERROR yapıyoruz
 set_log_level("ERROR")
 try:
     logger.remove()
@@ -150,16 +150,46 @@ class NakedGeminiTUI(App):
     Screen { 
         layout: vertical; 
     }
-    #header-bar { 
-        height: 1; 
-        border-bottom: solid #444444; 
-        padding: 0 1; 
-        color: #ffffff;
+    
+    /* ÜST BAŞLIK BARI (HEADER) */
+    #header-container {
+        height: 1;
+        layout: horizontal;
+        border-bottom: solid #444444;
+        padding: 0 1;
     }
+    #toggle-sidebar-btn {
+        width: 5;
+        height: 1;
+        color: #00ffcc;
+        text-style: bold;
+    }
+    #header-title-label {
+        width: 1fr;
+        height: 1;
+        color: #ffffff;
+        text-style: bold;
+    }
+    #incognito-btn {
+        width: 15;
+        height: 1;
+        color: #ffaa00;
+        text-style: bold;
+    }
+    #top-menu-btn {
+        width: 7;
+        height: 1;
+        color: #00ffcc;
+        text-style: bold;
+    }
+
+    /* ANA BÖLGE (BODY) */
     #body-container { 
         height: 1fr; 
         layout: horizontal; 
     }
+    
+    /* SOL KENAR ÇUBUĞU (SIDEBAR) */
     #sidebar { 
         width: 34; 
         height: 100%; 
@@ -173,31 +203,30 @@ class NakedGeminiTUI(App):
         text-style: bold;
         border-bottom: solid #333333;
     }
-    #nav-shortcuts {
-        height: 5;
-        margin-bottom: 1;
-        border-bottom: solid #333333;
-        color: #88bbff;
-    }
-    #sidebar-header-chat {
-        color: #aaaaaa;
-        text-style: bold;
-    }
     #search-input {
         height: 1;
         margin-bottom: 1;
         border-bottom: solid #333333;
     }
-    #chat-list {
+    #pinned-header {
+        color: #ffaa00;
+        text-style: bold;
+        margin-top: 1;
+    }
+    #pinned-list {
+        max-height: 7;
+        margin-bottom: 1;
+    }
+    #recent-header {
+        color: #aaaaaa;
+        text-style: bold;
+    }
+    #recent-list {
         height: 1fr;
         scrollbar-size: 1 1;
     }
-    #user-profile-card {
-        height: 1;
-        border-top: solid #333333;
-        color: #00ffcc;
-        text-style: bold;
-    }
+
+    /* SAĞ ANA ALAN (MAIN VIEWPORT) */
     #main-area { 
         width: 1fr; 
         height: 100%; 
@@ -207,6 +236,25 @@ class NakedGeminiTUI(App):
         height: 1fr; 
         scrollbar-size: 1 1; 
     }
+    
+    /* AÇILIR MENÜLER VE POPUP'LAR */
+    #top-dropdown-menu {
+        height: 5;
+        width: 32;
+        dock: right;
+        border: solid #00ffcc;
+        background: #111111;
+        display: none;
+        margin-top: 1;
+    }
+    #model-dropdown-menu {
+        height: 5;
+        width: 30;
+        border: solid #00ffcc;
+        background: #111111;
+        display: none;
+        margin-bottom: 1;
+    }
     #command-suggestions {
         height: 7;
         border: solid #00ffcc;
@@ -214,10 +262,24 @@ class NakedGeminiTUI(App):
         display: none;
         margin-bottom: 1;
     }
+
+    /* KART MENÜLERİ VE AKSİYON BUTONLARI */
+    #chat-action-buttons {
+        height: 1;
+        layout: horizontal;
+        margin-bottom: 1;
+        padding: 0 1;
+    }
+    .action-btn {
+        width: 18;
+        height: 1;
+        color: #00ffcc;
+        margin-right: 2;
+    }
+
     #chat-info-bar { 
-        height: 3; 
-        border-top: solid #00ffcc; 
-        border-bottom: solid #00ffcc; 
+        height: 1; 
+        border-top: solid #333333; 
         padding: 0 1; 
         color: #ffffff;
         text-style: bold;
@@ -228,17 +290,50 @@ class NakedGeminiTUI(App):
         padding: 0 1;
         display: none;
     }
+
+    /* ALT GİRDİ ÇUBUĞU (INPUT BAR) */
+    #input-container {
+        dock: bottom;
+        height: 1;
+        layout: horizontal;
+    }
+    #add-file-btn {
+        width: 5;
+        height: 1;
+        color: #00ffcc;
+        text-style: bold;
+    }
     #message-input { 
-        dock: bottom; 
+        width: 1fr;
+        height: 1;
         padding: 0; 
         margin: 0; 
     }
+    #model-select-btn {
+        width: 14;
+        height: 1;
+        color: #00ffcc;
+        text-style: bold;
+    }
+    #voice-btn {
+        width: 5;
+        height: 1;
+        color: #ffaa00;
+    }
+    #send-stop-btn {
+        width: 14;
+        height: 1;
+        color: #00ffcc;
+        text-style: bold;
+    }
+
     #footer-bar {
         height: 1;
         border-top: solid #333333;
         color: #888888;
         padding: 0 1;
     }
+
     ListItem { 
         padding-bottom: 1; 
     }
@@ -246,6 +341,10 @@ class NakedGeminiTUI(App):
         background: transparent; 
         text-style: bold; 
         color: #00ffcc;
+    }
+    Button:hover {
+        text-style: bold;
+        color: #ffffff;
     }
     Input:focus { 
         border: none; 
@@ -265,35 +364,57 @@ class NakedGeminiTUI(App):
         self.attached_files: List[str] = []
         self.all_chats_cache: List[Dict[str, Any]] = []
         self.is_authenticated_user: bool = False
+        self.is_incognito_mode: bool = False
+        self.is_generating_stream: bool = False
         
         self.last_user_prompt: str = ""
         self.last_gemini_response: str = ""
         self.last_generated_image_path: Optional[str] = None
         self._search_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
+        self._generate_worker = None
 
         self.load_local_cache()
 
     def compose(self) -> ComposeResult:
-        yield Label("✨ Gemini TUI │ Oturum kontrol ediliyor...", id="header-bar")
-        
+        with Horizontal(id="header-container"):
+            yield Button("[≡]", id="toggle-sidebar-btn")
+            yield Label("✨ Gemini TUI │ Oturum kontrol ediliyor...", id="header-title-label")
+            yield Button("[🕶️ Incognito]", id="incognito-btn")
+            yield Button("[⋮] Menü", id="top-menu-btn")
+
         with Horizontal(id="body-container"):
             with Vertical(id="sidebar"):
-                yield Label("✨ + Yeni sohbet (F1)", id="new-chat-btn")
-                yield Label("🎓 Öğrenciler  🖼️ Resimler  🎥 Videolar\n📚 Kitaplık   💎 Gem'ler", id="nav-shortcuts")
-                yield Label("💬 Son Kullanılanlar\n", id="sidebar-header-chat")
-                yield Input(placeholder="🔍 Sohbetlerde arama yapın...", id="search-input")
-                yield ListView(id="chat-list")
-                yield Label("👤 Cenk Orfa (Pro)", id="user-profile-card")
+                yield Button("[✏️ Yeni Sohbet]", id="new-chat-btn")
+                yield Input(placeholder="🔍 Sohbetlerde ara...", id="search-input")
+                yield Label("📌 SABİTLENENLER", id="pinned-header")
+                yield ListView(id="pinned-list")
+                yield Label("🕒 SON KULLANILANLAR", id="recent-header")
+                yield ListView(id="recent-list")
             
             with Vertical(id="main-area"):
                 yield RichLog(id="chat-log", wrap=True)
+                
+                with Horizontal(id="chat-action-buttons"):
+                    yield Button("[📋 Kopyala]", id="act-copy-btn", classes="action-btn")
+                    yield Button("[🔄 Yeniden Oluştur]", id="act-retry-btn", classes="action-btn")
+                    yield Button("[✏️ Düzenle]", id="act-edit-btn", classes="action-btn")
+
+                yield ListView(id="top-dropdown-menu")
+                yield ListView(id="model-dropdown-menu")
                 yield ListView(id="command-suggestions")
+                
                 yield Label("💬 Sohbet: Yeni Sohbet  │  ⚡ Model: 3.7 Flash", id="chat-info-bar")
                 yield Label("", id="attachments-bar")
-                yield Input(placeholder="Gemini'a sorun...", id="message-input")
                 
-        yield Label("Gemini bir yapay zeka modeli olduğu için hata yapabilir. │ F1: Yeni │ F2: Model │ F3: Dosya │ F4: Sil │ Alt+C: Kopyala │ Alt+V: Görsel", id="footer-bar")
+                with Horizontal(id="input-container"):
+                    yield Button("[+]", id="add-file-btn")
+                    yield Input(placeholder="Promptunuzu yazın...", id="message-input")
+                    yield Button("[Flash ▾]", id="model-select-btn")
+                    yield Button("[🎙️]", id="voice-btn")
+                    yield Button("[ Gönder ⏎ ]", id="send-stop-btn")
+                
+        yield Label("Gemini bir yapay zeka modeli olduğu için hata yapabilir. │ F1: Yeni │ F2: Model │ F3: Dosya │ Alt+C: Kopyala │ Alt+V: Görsel", id="footer-bar")
 
     def on_mount(self) -> None:
         if self.all_chats_cache:
@@ -303,24 +424,120 @@ class NakedGeminiTUI(App):
         self.update_chat_info_bar()
         self.connect_to_gemini()
         
-        # YÖNTEM A: Saf HTTP Heartbeat Motorunu Başlat (120 saniyede bir oturumu taze tutar)
+        # YÖNTEM A: Saf HTTP Heartbeat Motoru
         self._heartbeat_task = asyncio.create_task(self.start_http_heartbeat_loop())
 
-    # --- YÖNTEM A: SAF HTTP HEARTBEAT MOTORU (0 MB RAM / 0 MB DISK / %0 CPU) ---
+    # --- HTTP HEARTBEAT MOTORU (0 MB RAM / 0 MB DISK / %0 CPU) ---
     async def start_http_heartbeat_loop(self) -> None:
-        """
-        120 saniyede bir arka planda Google istemcisine 2 KB boyutunda minik bir HTTP POST/GET isteği atar.
-        Böylece __Secure-1PSIDTS çerezi Google tarafından hiç düşürülmez ve oturum kesintisiz canlı kalır.
-        """
         while True:
             await asyncio.sleep(120)
-            if self.client and self.is_authenticated_user:
+            if self.client and self.is_authenticated_user and not self.is_incognito_mode:
                 try:
                     if hasattr(self.client, "client") and self.client.client:
                         await rotate_1psidts(self.client.client, verbose=False)
                     await self.client._fetch_user_status()
                 except Exception:
                     pass
+
+    # --- BUTTON VE CLICKGUI TIKLAMA OLAYLARI (CLICK EVENT HANDLERS) ---
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id
+
+        if btn_id == "toggle-sidebar-btn":
+            sidebar = self.query_one("#sidebar", Vertical)
+            sidebar.display = not sidebar.display
+
+        elif btn_id == "incognito-btn":
+            self.is_incognito_mode = not self.is_incognito_mode
+            incog_btn = self.query_one("#incognito-btn", Button)
+            if self.is_incognito_mode:
+                incog_btn.label = "[🕶️ GİZLİ SOHBET]"
+                incog_btn.styles.color = "#ff3366"
+            else:
+                incog_btn.label = "[🕶️ Incognito]"
+                incog_btn.styles.color = "#ffaa00"
+            self.update_header_status()
+
+        elif btn_id == "top-menu-btn":
+            self.toggle_top_menu()
+
+        elif btn_id == "new-chat-btn":
+            self.action_new_chat()
+
+        elif btn_id == "act-copy-btn":
+            self.action_copy_last_response()
+
+        elif btn_id == "act-retry-btn":
+            if self.last_user_prompt and self.active_chat:
+                self.send_message_to_gemini(self.last_user_prompt)
+
+        elif btn_id == "act-edit-btn":
+            if self.last_user_prompt:
+                msg_input = self.query_one("#message-input", Input)
+                msg_input.value = self.last_user_prompt
+                msg_input.focus()
+
+        elif btn_id == "add-file-btn":
+            self.action_prompt_file()
+
+        elif btn_id == "model-select-btn":
+            self.toggle_model_menu()
+
+        elif btn_id == "send-stop-btn":
+            if self.is_generating_stream:
+                self.stop_generating_stream()
+            else:
+                msg_input = self.query_one("#message-input", Input)
+                val = msg_input.value.strip()
+                if val:
+                    self.on_input_submitted(Input.Submitted(msg_input, val))
+
+    def stop_generating_stream(self) -> None:
+        self.is_generating_stream = False
+        btn = self.query_one("#send-stop-btn", Button)
+        btn.label = "[ Gönder ⏎ ]"
+        btn.styles.color = "#00ffcc"
+
+    def toggle_top_menu(self) -> None:
+        top_menu = self.query_one("#top-dropdown-menu", ListView)
+        if top_menu.display:
+            top_menu.display = False
+        else:
+            asyncio.create_task(self._render_top_menu_items())
+
+    async def _render_top_menu_items(self) -> None:
+        top_menu = self.query_one("#top-dropdown-menu", ListView)
+        await top_menu.clear()
+        
+        items = [
+            ListItem(Label("🧹 Geçmişi Temizle"), id="menu-clear-history"),
+            ListItem(Label("💾 Markdown Olarak Kaydet"), id="menu-export-md"),
+            ListItem(Label("📊 Token / Kullanım Bilgisi"), id="menu-token-info"),
+        ]
+        await top_menu.mount(*items)
+        top_menu.display = True
+
+    def toggle_model_menu(self) -> None:
+        model_menu = self.query_one("#model-dropdown-menu", ListView)
+        if model_menu.display:
+            model_menu.display = False
+        else:
+            asyncio.create_task(self._render_model_menu_items())
+
+    async def _render_model_menu_items(self) -> None:
+        model_menu = self.query_one("#model-dropdown-menu", ListView)
+        await model_menu.clear()
+        
+        items = []
+        for idx, m in enumerate(self.available_models):
+            display = m.display_name if hasattr(m, "display_name") else str(m)
+            prefix = "● " if idx == self.active_model_idx else "○ "
+            item = ListItem(Label(f"{prefix}{display}"))
+            item.model_index = idx
+            items.append(item)
+            
+        await model_menu.mount(*items)
+        model_menu.display = True
 
     # --- 2 KAT YÜKSEK ÇÖZÜNÜRLÜKLÜ SOHBET İÇİ YARIM-BLOK (HALF-BLOCK ▀) RENDER EDİCİ ---
     def render_image_in_chat(self, img_path_str: str, max_width: int = 85) -> Optional[Text]:
@@ -419,6 +636,8 @@ class NakedGeminiTUI(App):
             self.all_chats_cache = []
 
     def save_local_cache(self, chats_data: List[Dict[str, Any]]) -> None:
+        if self.is_incognito_mode:
+            return
         try:
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
             with open(CACHE_FILE, "w", encoding="utf-8") as f:
@@ -437,11 +656,13 @@ class NakedGeminiTUI(App):
         bar.update(f"💬 Sohbet: [bold white]{chat_title}[/bold white]  │  ⚡ Model: [bold green]{model_name}[/bold green]")
 
     def update_header_status(self) -> None:
-        header = self.query_one("#header-bar", Label)
+        header = self.query_one("#header-title-label", Label)
         model_display = self.get_current_model_display_name()
         
-        if self.is_authenticated_user and self.all_chats_cache:
-            session_status = "[bold green]🟢 Hesaba Bağlı (Google Account Web Chat)[/bold green]"
+        if self.is_incognito_mode:
+            session_status = "[bold red]🕶️ GİZLİ SOHBET (Bellekte)[/bold red]"
+        elif self.is_authenticated_user and self.all_chats_cache:
+            session_status = "[bold green]🟢 Hesaba Bağlı (Google Account)[/bold green]"
         elif self.client and getattr(self.client, "_cookie_source", "") != "Guest":
             session_status = f"[bold green]🟢 Bağlandı ({getattr(self.client, '_cookie_source', '')})[/bold green]"
         else:
@@ -467,10 +688,10 @@ class NakedGeminiTUI(App):
             "Google web hesabınızla (`gemini.google.com`) sohbet geçmişinizi senkronize etmek için 30 saniyelik adımlar:\n\n"
             "1. Tarayıcınızda (Chrome/Brave/Firefox) [gemini.google.com](https://gemini.google.com) sekmesini açın.\n"
             "2. **`F12`** tuşuna basıp **Network (Ağ)** sekmesine geçin, sayfayı yenileyin (`F5`).\n"
-            "3. Listede çıkan `gemini.google.com` isteğindeki **`Cookie:`** satırını tamamen kopyalayın.\n"
+            "3. Listede çıkan `gemini.google.com` isteğindeki **`Cookie:`** satırını kopyalayın.\n"
             "4. Aşağıdaki mesaj kutusuna yazıp gönderin:\n"
             "   `/login kopyaladığınız_metin`\n\n"
-            "*(Sistem kopyaladığınız metindeki `__Secure-1PSID` ve `__Secure-1PSIDTS` çerezlerini ayıklayıp canlı web sohbetlerinize bağlanır ve HTTP Heartbeat ile oturumu canlı tutar!)*"
+            "*(Sistem çerezleri ayıklayıp canlı web sohbetlerinize bağlanır ve HTTP Heartbeat ile oturumu canlı tutar!)*"
         )
         chat_log.write(Markdown(login_guide))
         chat_log.write("\n---\n")
@@ -506,7 +727,6 @@ class NakedGeminiTUI(App):
             selected_model = self.available_models[self.active_model_idx] if self.available_models else None
             self.active_chat = self.client.start_chat(model=selected_model)
             
-            # Doğrulama: Gerçekten sohbetler çekilebiliyor mu?
             try:
                 await self.client._fetch_recent_chats(recent=100)
                 chats = self.client.list_chats() or []
@@ -531,7 +751,7 @@ class NakedGeminiTUI(App):
 
     @work(exclusive=True, group="sync_bg")
     async def sync_chats_from_server_bg(self) -> None:
-        if not self.client:
+        if not self.client or self.is_incognito_mode:
             return
 
         try:
@@ -569,70 +789,53 @@ class NakedGeminiTUI(App):
             self.all_chats_cache = cache_data
             self.save_local_cache(cache_data)
 
-            if self.active_chat and self.active_chat.cid:
-                for c in cache_data:
-                    if c["cid"] == self.active_chat.cid and c["title"]:
-                        self.active_chat_title = c["title"]
-                        self.update_chat_info_bar()
-                        break
-
             search_val = self.query_one("#search-input", Input).value
             await self.render_chat_list(cache_data, filter_query=search_val)
         except Exception:
             pass
 
     async def render_chat_list(self, chats: List[Dict[str, Any]], filter_query: str = "") -> None:
-        if not self.is_mounted:
+        if not self.is_mounted or self.is_incognito_mode:
             return
             
         try:
-            chat_list = self.query_one("#chat-list", ListView)
+            pinned_list = self.query_one("#pinned-list", ListView)
+            recent_list = self.query_one("#recent-list", ListView)
+            await pinned_list.clear()
+            await recent_list.clear()
         except Exception:
             return
 
-        if not getattr(chat_list, "is_mounted", False):
-            return
+        filter_lower = filter_query.lower().strip()
+        
+        pinned_chats = [c for c in chats if c.get("is_pinned", False)]
+        recent_chats = [c for c in chats if not c.get("is_pinned", False)]
 
-        try:
-            await chat_list.clear()
+        # Pinned mount
+        pinned_items = []
+        for chat in pinned_chats:
+            title = chat.get("title") or "Sohbet"
+            if filter_lower and filter_lower not in title.lower():
+                continue
+            item = ListItem(Label(f"📌 {title}"))
+            item.chat_id = chat.get("cid")
+            item.title_text = title
+            pinned_items.append(item)
+        if pinned_items:
+            await pinned_list.mount(*pinned_items)
 
-            sidebar_header = self.query_one("#sidebar-header-chat", Label)
-            sidebar_header.update(f"💬 Son Kullanılanlar ({len(chats)})\n")
-
-            if not self.is_authenticated_user:
-                item = ListItem(Label("> (Misafir Modu)"))
-                item.chat_id = None
-                await chat_list.mount(item)
-                return
-
-            if not chats:
-                item = ListItem(Label("> (Geçmiş Sohbet Yok)"))
-                item.chat_id = None
-                await chat_list.mount(item)
-                return
-
-            filter_lower = filter_query.lower().strip()
-            
-            pinned = [c for c in chats if c.get("is_pinned", False)]
-            others = [c for c in chats if not c.get("is_pinned", False)]
-            ordered = pinned + others
-
-            items = []
-            for chat in ordered:
-                title = chat.get("title") or f"Sohbet ({chat.get('cid', '')[:8]})"
-                if filter_lower and filter_lower not in title.lower():
-                    continue
-                    
-                pin_prefix = "📌 " if chat.get("is_pinned", False) else "> "
-                item = ListItem(Label(f"{pin_prefix}{title}"))
-                item.chat_id = chat.get("cid")
-                item.title_text = title
-                items.append(item)
-
-            if items:
-                await chat_list.mount(*items)
-        except Exception:
-            pass
+        # Recent mount
+        recent_items = []
+        for chat in recent_chats:
+            title = chat.get("title") or "Sohbet"
+            if filter_lower and filter_lower not in title.lower():
+                continue
+            item = ListItem(Label(f"• {title}"))
+            item.chat_id = chat.get("cid")
+            item.title_text = title
+            recent_items.append(item)
+        if recent_items:
+            await recent_list.mount(*recent_items)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "search-input":
@@ -735,7 +938,36 @@ class NakedGeminiTUI(App):
             self.active_chat = self.client.start_chat(cid=chat_id, model=selected_model) if self.client else None
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.list_view.id == "command-suggestions":
+        list_id = event.list_view.id
+
+        if list_id == "top-dropdown-menu":
+            item_id = event.item.id
+            self.query_one("#top-dropdown-menu", ListView).display = False
+            
+            if item_id == "menu-clear-history":
+                self.query_one("#chat-log", RichLog).clear()
+            elif item_id == "menu-export-md":
+                self.action_export_chat()
+            elif item_id == "menu-token-info":
+                chat_log = self.query_one("#chat-log", RichLog)
+                chat_log.write(Markdown("📊 **Token ve Kullanım Bilgisi:** Sınırsız Web İstemci Modu (Compute Limit: Aktif)"))
+                chat_log.write("\n")
+                chat_log.scroll_end(animate=False)
+            return
+
+        if list_id == "model-dropdown-menu":
+            idx = getattr(event.item, "model_index", 0)
+            self.active_model_idx = idx
+            self.query_one("#model-dropdown-menu", ListView).display = False
+            
+            new_m = self.available_models[self.active_model_idx]
+            if self.active_chat:
+                self.active_chat.model = new_m
+            self.update_header_status()
+            self.update_chat_info_bar()
+            return
+
+        if list_id == "command-suggestions":
             cmd = getattr(event.item, "command_str", None)
             if cmd:
                 msg_input = self.query_one("#message-input", Input)
@@ -755,7 +987,7 @@ class NakedGeminiTUI(App):
                 self.query_one("#command-suggestions", ListView).display = False
             return
 
-        if event.list_view.id == "chat-list":
+        if list_id in ["pinned-list", "recent-list"]:
             chat_id = getattr(event.item, "chat_id", None)
             if chat_id:
                 title = getattr(event.item, "title_text", "Sohbet")
@@ -765,12 +997,6 @@ class NakedGeminiTUI(App):
     # --- SOHBETİ DISA AKTARMA (/export) ---
     def action_export_chat(self, filename: str = "") -> None:
         chat_log = self.query_one("#chat-log", RichLog)
-        if not self.active_chat:
-            chat_log.write(Markdown("⚠️ **Dışa aktarılacak aktif sohbet bulunamadı.**"))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
-            return
-
         if not filename:
             now_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             clean_title = "".join(c if c.isalnum() else "_" for c in self.active_chat_title)[:25]
@@ -810,88 +1036,6 @@ class NakedGeminiTUI(App):
             chat_log.write("\n")
         chat_log.scroll_end(animate=False)
 
-    # --- SOHBET DOSYASI İÇE AKTARMA VE CANLI BAĞLAM RESTORE ETME (/import) ---
-    def action_import_chat(self, filepath_str: str) -> None:
-        chat_log = self.query_one("#chat-log", RichLog)
-        if not filepath_str:
-            chat_log.write(Markdown("⚠️ **Lütfen bir dosya yolu belirtin:** `/import sohbet_dosyasi.md`"))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
-            return
-
-        import_path = Path(filepath_str.strip("'\"")).expanduser()
-        if not import_path.exists():
-            chat_log.write(Markdown(f"⚠️ **Dosya bulunamadı:** `{filepath_str}`"))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
-            return
-
-        asyncio.create_task(self._do_import_file(import_path))
-
-    async def _do_import_file(self, import_path: Path) -> None:
-        chat_log = self.query_one("#chat-log", RichLog)
-        try:
-            with open(import_path, "r", encoding="utf-8") as f:
-                content = f.read()
-
-            sections = re.split(r'### (👤 Sen|🤖 Gemini)\n\n', content)
-            imported_turns = []
-            for i in range(1, len(sections), 2):
-                role_raw = sections[i]
-                text = sections[i+1].split('\n\n---\n\n')[0].strip()
-                role = "user" if "Sen" in role_raw else "model"
-                imported_turns.append((role, text))
-
-            if not imported_turns:
-                user_blocks = re.findall(r"(?:### 👤 Sen|User:)\s*\n+(.*?)(?=\n+###|\n+🤖|\n+Gemini:|$)", content, re.DOTALL)
-                gemini_blocks = re.findall(r"(?:### 🤖 Gemini|Gemini:)\s*\n+(.*?)(?=\n+###|\n+👤|\n+User:|$)", content, re.DOTALL)
-                for u, g in zip(user_blocks, gemini_blocks):
-                    imported_turns.append(("user", u.strip()))
-                    imported_turns.append(("model", g.strip()))
-
-            if not imported_turns:
-                chat_log.write(Markdown("⚠️ **Dosya içerisinde geçerli sohbet turu bulunamadı.**"))
-                chat_log.write("\n")
-                chat_log.scroll_end(animate=False)
-                return
-
-            selected_model = self.available_models[self.active_model_idx] if self.available_models else None
-            self.active_chat = self.client.start_chat(model=selected_model) if self.client else None
-            self.active_chat_title = f"İçeri Aktarıldı: {import_path.stem}"
-            self.update_chat_info_bar()
-
-            chat_log.clear()
-            chat_log.write(Markdown(f"📥 **Sohbet geçmişi içeri aktarıldı:** `{import_path.name}` ({len(imported_turns)} mesaj)"))
-            chat_log.write("\n---\n")
-
-            history_summary = []
-            for role, text in imported_turns:
-                if role == "user":
-                    chat_log.write(Markdown(f"**Sen:** {text}"))
-                    chat_log.write("\n")
-                    history_summary.append(f"User: {text}")
-                else:
-                    self.last_gemini_response = text
-                    chat_log.write(Text("Gemini:", style="bold green"))
-                    chat_log.write(Markdown(text))
-                    chat_log.write("\n---\n")
-                    history_summary.append(f"Gemini: {text}")
-
-            chat_log.scroll_end(animate=False)
-
-            if self.active_chat:
-                context_prompt = (
-                    "[ÖNEMLİ SİSTEM TALİMATI: Aşağıdaki metin geçmiş sohbet kaydımızdır. "
-                    "Lütfen bu geçmişi aktif sohbet oturumunun resmi bağlamı olarak kabul et ve sonraki mesajlarıma bu bağlamı sürdürerek yanıt ver]:\n\n"
-                    + "\n\n".join(history_summary[-10:])
-                )
-                asyncio.create_task(self.active_chat.send_message(context_prompt))
-
-        except Exception as e:
-            chat_log.write(Markdown(f"⚠️ **İçeri aktarma hatası:** `{str(e)}`"))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
-
     # --- PANOYA KOPYALAMA (Alt+C / /copy) ---
     def action_copy_last_response(self) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
@@ -925,50 +1069,6 @@ class NakedGeminiTUI(App):
         else:
             chat_log.write(Markdown("⚠️ **Panoya kopyalama başarısız (wl-copy / xclip bulunamadı).**"))
             chat_log.write("\n")
-        chat_log.scroll_end(animate=False)
-
-    # --- SOHBETİ YENİDEN ADLANDIRMA VE SABİTLEME ---
-    def action_pin_chat(self) -> None:
-        if not self.active_chat or not self.active_chat.cid:
-            return
-        
-        cid = self.active_chat.cid
-        chat_log = self.query_one("#chat-log", RichLog)
-        
-        for c in self.all_chats_cache:
-            if c.get("cid") == cid:
-                c["is_pinned"] = not c.get("is_pinned", False)
-                state_str = "iğnelendi (📌)" if c["is_pinned"] else "iğnesi kaldırıldı"
-                chat_log.write(Markdown(f"📌 **Sohbet {state_str}.**"))
-                chat_log.write("\n")
-                break
-                
-        self.save_local_cache(self.all_chats_cache)
-        search_val = self.query_one("#search-input", Input).value
-        asyncio.create_task(self.render_chat_list(self.all_chats_cache, filter_query=search_val))
-        chat_log.scroll_end(animate=False)
-
-    def action_rename_chat(self, new_title: str) -> None:
-        if not self.active_chat or not self.active_chat.cid or not new_title:
-            return
-            
-        cid = self.active_chat.cid
-        self.active_chat_title = new_title
-        self.update_chat_info_bar()
-        
-        for c in self.all_chats_cache:
-            if c.get("cid") == cid:
-                c["title"] = new_title
-                c["title_renamed"] = True
-                break
-                
-        self.save_local_cache(self.all_chats_cache)
-        search_val = self.query_one("#search-input", Input).value
-        asyncio.create_task(self.render_chat_list(self.all_chats_cache, filter_query=search_val))
-        
-        chat_log = self.query_one("#chat-log", RichLog)
-        chat_log.write(Markdown(f"✏️ **Sohbet yeniden adlandırıldı:** `{new_title}`"))
-        chat_log.write("\n")
         chat_log.scroll_end(animate=False)
 
     # --- AKSİYON KISAYOLLARI ---
@@ -1111,24 +1211,6 @@ class NakedGeminiTUI(App):
             self.action_copy_last_response()
             return
 
-        if text == "/pin":
-            self.action_pin_chat()
-            return
-
-        if text.startswith("/rename "):
-            new_t = text.split(" ", 1)[1].strip()
-            self.action_rename_chat(new_t)
-            return
-
-        if text == "/clear":
-            self.attached_files.clear()
-            self.update_attachments_bar()
-            chat_log = self.query_one("#chat-log", RichLog)
-            chat_log.write(Markdown("📎 **Ekli dosyalar temizlendi.**"))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
-            return
-
         if text == "/new":
             self.action_new_chat()
             return
@@ -1137,17 +1219,6 @@ class NakedGeminiTUI(App):
             if self.available_models:
                 self.action_cycle_model()
             return
-
-        if text.startswith("/model "):
-            val = text.split(" ", 1)[1].strip()
-            if val.isdigit() and 1 <= int(val) <= len(self.available_models):
-                self.active_model_idx = int(val) - 1
-                new_m = self.available_models[self.active_model_idx]
-                if self.active_chat:
-                    self.active_chat.model = new_m
-                self.update_header_status()
-                self.update_chat_info_bar()
-                return
 
         if text == "/delete":
             self.action_delete_chat()
@@ -1187,8 +1258,13 @@ class NakedGeminiTUI(App):
     @work(exclusive=True)
     async def send_message_to_gemini(self, message: str, files: Optional[List[str]] = None) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
+        send_btn = self.query_one("#send-stop-btn", Button)
         
         try:
+            self.is_generating_stream = True
+            send_btn.label = "[ 🛑 Durdur ]"
+            send_btn.styles.color = "#ff3366"
+
             response_text = ""
             base_lines = len(chat_log.lines)
             last_chunk_obj = None
@@ -1197,6 +1273,9 @@ class NakedGeminiTUI(App):
                 prompt=message,
                 files=files
             ):
+                if not self.is_generating_stream:
+                    break
+
                 if chunk:
                     last_chunk_obj = chunk
                     if chunk.text_delta:
@@ -1245,13 +1324,17 @@ class NakedGeminiTUI(App):
                         is_new_chat = False
                         break
                         
-            if is_new_chat:
+            if is_new_chat and not self.is_incognito_mode:
                 self.sync_chats_from_server_bg()
             
         except Exception as e:
             chat_log.write(Markdown(f"**[Hata]:** `{str(e)}`"))
             chat_log.write("\n")
             chat_log.scroll_end(animate=False)
+        finally:
+            self.is_generating_stream = False
+            send_btn.label = "[ Gönder ⏎ ]"
+            send_btn.styles.color = "#00ffcc"
 
 if __name__ == "__main__":
     app = NakedGeminiTUI()
