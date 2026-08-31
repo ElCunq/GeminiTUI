@@ -418,6 +418,12 @@ class NakedGeminiTUI(App):
         padding: 0; 
         margin: 0; 
         border: none;
+        background: #111111;
+        color: #ffffff;
+    }
+    PromptTextArea {
+        background: #111111;
+        color: #ffffff;
     }
     #prompt-text-area:focus {
         border: solid #00ffcc;
