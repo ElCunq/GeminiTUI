@@ -30,7 +30,7 @@ from gemini_webapi import GeminiClient
 from gemini_webapi.types.availablemodel import AvailableModel
 from gemini_webapi.utils import set_log_level, logger, rotate_1psidts, clear_cookies_cache
 
-# Terminal kirliliğini önlemek için log seviyesini ERROR yapıyoruz
+# Terminal log kirliliğini tamamen kapatıyoruz
 set_log_level("ERROR")
 try:
     logger.remove()
@@ -48,7 +48,7 @@ COMMANDS_LIST = [
     ("/help", "Kullanım yardımını ve komut listesini gösterir"),
     ("/new", "Yeni temiz bir sohbet başlatır"),
     ("/model", "AI modelleri arasında geçiş yapar (3.7 Flash, 3.1 Pro, 3.5 Flash-Lite)"),
-    ("/login [Çerez]", "Tarayıcı çerezlerinizi girerek hesaba doğrudan bağlanır"),
+    ("/login [Çerez]", "Tarayıcıda gemini.google.com açar ve otomatik oturum tarar"),
     ("/export <dosya>", "Aktif sohbeti Markdown (.md) dosyası olarak kaydeder"),
     ("/import <dosya>", "Kaydedilmiş sohbet dosyasını yükler ve bağlamı canlı oturuma aktarır"),
     ("/file <yol>", "Görsel (PNG/JPG/WEBP), PDF veya metin dosyası ekler (F3/Alt+F)"),
@@ -372,7 +372,6 @@ class NakedGeminiTUI(App):
         self.last_generated_image_path: Optional[str] = None
         self._search_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
-        self._generate_worker = None
 
         self.load_local_cache()
 
@@ -439,7 +438,7 @@ class NakedGeminiTUI(App):
                 except Exception:
                     pass
 
-    # --- BUTTON VE CLICKGUI TIKLAMA OLAYLARI (CLICK EVENT HANDLERS) ---
+    # --- BUTTON VE CLICKGUI TIKLAMA OLAYLARI ---
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id
 
@@ -681,21 +680,51 @@ class NakedGeminiTUI(App):
             bar.update("")
             bar.display = False
 
-    def show_login_instructions(self) -> None:
+    def trigger_auto_browser_login(self) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
-        login_guide = (
-            "🌐 **Google Gemini Web Oturumu Bağlantı Rehberi**\n\n"
-            "Google web hesabınızla (`gemini.google.com`) sohbet geçmişinizi senkronize etmek için 30 saniyelik adımlar:\n\n"
-            "1. Tarayıcınızda (Chrome/Brave/Firefox) [gemini.google.com](https://gemini.google.com) sekmesini açın.\n"
-            "2. **`F12`** tuşuna basıp **Network (Ağ)** sekmesine geçin, sayfayı yenileyin (`F5`).\n"
-            "3. Listede çıkan `gemini.google.com` isteğindeki **`Cookie:`** satırını kopyalayın.\n"
-            "4. Aşağıdaki mesaj kutusuna yazıp gönderin:\n"
-            "   `/login kopyaladığınız_metin`\n\n"
-            "*(Sistem çerezleri ayıklayıp canlı web sohbetlerinize bağlanır ve HTTP Heartbeat ile oturumu canlı tutar!)*"
-        )
-        chat_log.write(Markdown(login_guide))
-        chat_log.write("\n---\n")
+        chat_log.write(Markdown("🌐 **Varsayılan tarayıcınızda `gemini.google.com` adresi açılıyor...**"))
+        chat_log.write(Markdown("⌛ *Google hesabınız arka planda taranıyor (30 saniye)...*"))
+        chat_log.write("\n")
         chat_log.scroll_end(animate=False)
+        
+        try:
+            webbrowser.open("https://gemini.google.com")
+        except Exception:
+            pass
+
+        asyncio.create_task(self._poll_auto_login())
+
+    async def _poll_auto_login(self) -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        start_t = time.time()
+        
+        while time.time() - start_t < 30:
+            await asyncio.sleep(2.5)
+            try:
+                temp_client = GeminiClient(auto_cookies=True)
+                await temp_client.init(timeout=10, auto_close=False, auto_refresh=True)
+                
+                await temp_client._fetch_recent_chats(recent=20)
+                chats = temp_client.list_chats() or []
+                
+                if chats:
+                    cookie_src = getattr(temp_client, "_cookie_source", "browser")
+                    psid = temp_client._cookies.get("__Secure-1PSID")
+                    psidts = temp_client._cookies.get("__Secure-1PSIDTS")
+                    psidcc = temp_client._cookies.get("__Secure-1PSIDCC")
+                    
+                    if psid:
+                        save_cookie_credentials(psid, psidts, psidcc)
+                        chat_log.write(Markdown(f"🎉 **Tebrikler! Google hesabınız `{cookie_src}` üzerinden otomatik olarak algılandı ve bağlandı!**"))
+                        chat_log.write("\n---\n")
+                        chat_log.scroll_end(animate=False)
+                        self.connect_to_gemini()
+                        return
+            except Exception:
+                pass
+
+    def show_login_instructions(self) -> None:
+        self.trigger_auto_browser_login()
 
     # --- GEMINI CLIENT VE CANLI WEB BAGLANTISI ---
     @work(exclusive=True)
@@ -740,7 +769,7 @@ class NakedGeminiTUI(App):
             
             cookie_source = getattr(self.client, "_cookie_source", "")
             if cookie_source == "Guest" or not self.is_authenticated_user:
-                self.show_login_instructions()
+                self.trigger_auto_browser_login()
             else:
                 self.sync_chats_from_server_bg()
         except Exception as e:
@@ -1126,7 +1155,7 @@ class NakedGeminiTUI(App):
             "- **F1** veya **Alt+N** veya `/new` : Yeni sohbet başlatır.\n"
             "- **F2** veya **Alt+M** veya `/model` : AI Modelleri arasında geçiş yapar.\n"
             "- **F3** veya **Alt+F** veya `/file <yol>` : Görsel (PNG/JPG/WEBP), PDF veya metin dosyası ekler.\n"
-            "- `/login` : Oturum açma rehberini gösterir.\n"
+            "- `/login` : Varsayılan tarayıcıda gemini.google.com açar ve otomatik bağlanır.\n"
             "- `/export <dosya>` : Aktif sohbeti Markdown (.md) dosyası olarak kaydeder.\n"
             "- `/import <dosya>` : Kaydedilmiş sohbet dosyasını yükler ve canlı oturum bağlamına aktarır.\n"
             "- **F4** veya **Alt+D** veya `/delete` : Aktif sohbeti hesabınızdan siler.\n"
@@ -1155,7 +1184,7 @@ class NakedGeminiTUI(App):
         self.query_one("#command-suggestions", ListView).display = False
 
         if text == "/login":
-            self.show_login_instructions()
+            self.trigger_auto_browser_login()
             return
 
         if text.startswith("/login "):
@@ -1170,7 +1199,7 @@ class NakedGeminiTUI(App):
                 chat_log.scroll_end(animate=False)
                 self.connect_to_gemini()
             else:
-                self.show_login_instructions()
+                self.trigger_auto_browser_login()
             return
 
         if text.startswith("/import "):
