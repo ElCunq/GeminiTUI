@@ -283,6 +283,7 @@ class NakedGeminiTUI(App):
         layout: horizontal;
         border-bottom: solid #444444;
         padding: 0 1;
+        margin-bottom: 1;
     }
     #toggle-sidebar-btn {
         width: 5;
@@ -363,6 +364,7 @@ class NakedGeminiTUI(App):
     }
     #chat-log { 
         height: 1fr; 
+        margin-bottom: 1;
         scrollbar-size: 1 1; 
     }
     
@@ -412,30 +414,37 @@ class NakedGeminiTUI(App):
         padding: 0 1; 
         color: #ffffff;
         text-style: bold;
+        margin-bottom: 1;
     }
     #attachments-bar { 
         height: 1; 
         color: #77aaff; 
         padding: 0 1;
         display: none;
+        margin-bottom: 1;
     }
 
-    /* ALT GİRDİ ÇUBUĞU (INPUT BAR) */
+    /* ALT GİRDİ ÇUBUĞU (INPUT BAR - FERAH 4 SATIR + ALT MARJİN) */
     #input-container {
-        height: 3;
+        height: 4;
         layout: horizontal;
-        border-top: solid #00ffcc;
+        border: solid #00ffcc;
+        margin-bottom: 1;
+        padding: 0;
+    }
+    #add-file-btn, #model-select-btn, #voice-btn, #send-stop-btn {
+        height: 100%;
+        content-align: center middle;
     }
     #add-file-btn {
         width: 5;
-        height: 3;
         color: #00ffcc;
         text-style: bold;
     }
     #prompt-text-area { 
         width: 1fr;
-        height: 3;
-        padding: 0; 
+        height: 100%;
+        padding: 0 1; 
         margin: 0; 
         border: none;
         background: #111111;
@@ -450,32 +459,26 @@ class NakedGeminiTUI(App):
         color: #000000;
         text-style: bold;
     }
-    #prompt-text-area:focus {
-        border: solid #00ffcc;
-    }
     #model-select-btn {
         width: 14;
-        height: 3;
         color: #00ffcc;
         text-style: bold;
     }
     #voice-btn {
         width: 5;
-        height: 3;
         color: #ffaa00;
     }
     #send-stop-btn {
         width: 14;
-        height: 3;
         color: #00ffcc;
         text-style: bold;
     }
 
     #footer-bar {
         height: 1;
-        border-top: solid #333333;
         color: #888888;
         padding: 0 1;
+        margin-bottom: 1;
     }
 
     ListItem { 
