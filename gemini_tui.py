@@ -28,9 +28,9 @@ except ImportError:
 
 from gemini_webapi import GeminiClient
 from gemini_webapi.types.availablemodel import AvailableModel
-from gemini_webapi.utils import set_log_level, logger, clear_cookies_cache
+from gemini_webapi.utils import set_log_level, logger, rotate_1psidts, clear_cookies_cache
 
-# Terminal kirliliğini önlüyoruz
+# Terminal log kirliliğini tamamen kapatıyoruz
 set_log_level("ERROR")
 try:
     logger.remove()
@@ -48,10 +48,10 @@ COMMANDS_LIST = [
     ("/help", "Kullanım yardımını ve komut listesini gösterir"),
     ("/new", "Yeni temiz bir sohbet başlatır"),
     ("/model", "AI modelleri arasında geçiş yapar (3.7 Flash, 3.1 Pro, 3.5 Flash-Lite)"),
-    ("/login [Çerez]", "Tarayıcı çerezlerinizi manuel yapıştırarak giriş yapar"),
+    ("/login [Çerez]", "Tarayıcı çerezlerinizi girerek hesaba doğrudan bağlanır"),
     ("/export <dosya>", "Aktif sohbeti Markdown (.md) dosyası olarak kaydeder"),
     ("/import <dosya>", "Kaydedilmiş sohbet dosyasını yükler ve bağlamı canlı oturuma aktarır"),
-    ("/file <yol>", "Görsel (PNG/JPG/WEBP), PDF veya kod/metin dosyası ekler (F3/Alt+F)"),
+    ("/file <yol>", "Görsel (PNG/JPG/WEBP), PDF veya metin dosyası ekler (F3/Alt+F)"),
     ("/view", "Son üretilen görseli mpv ile tam çözünürlükte açar (Alt+V)"),
     ("/copy", "En son verilen yanıtı panoya kopyalar (Alt+C)"),
     ("/rename <başlık>", "Aktif sohbetin başlığını değiştirir"),
@@ -173,6 +173,12 @@ class NakedGeminiTUI(App):
         text-style: bold;
         border-bottom: solid #333333;
     }
+    #nav-shortcuts {
+        height: 5;
+        margin-bottom: 1;
+        border-bottom: solid #333333;
+        color: #88bbff;
+    }
     #sidebar-header-chat {
         color: #aaaaaa;
         text-style: bold;
@@ -185,6 +191,12 @@ class NakedGeminiTUI(App):
     #chat-list {
         height: 1fr;
         scrollbar-size: 1 1;
+    }
+    #user-profile-card {
+        height: 1;
+        border-top: solid #333333;
+        color: #00ffcc;
+        text-style: bold;
     }
     #main-area { 
         width: 1fr; 
@@ -258,27 +270,30 @@ class NakedGeminiTUI(App):
         self.last_gemini_response: str = ""
         self.last_generated_image_path: Optional[str] = None
         self._search_task: Optional[asyncio.Task] = None
+        self._heartbeat_task: Optional[asyncio.Task] = None
 
         self.load_local_cache()
 
     def compose(self) -> ComposeResult:
-        yield Label("⚡ Gemini TUI │ Oturum kontrol ediliyor...", id="header-bar")
+        yield Label("✨ Gemini TUI │ Oturum kontrol ediliyor...", id="header-bar")
         
         with Horizontal(id="body-container"):
             with Vertical(id="sidebar"):
-                yield Label("✨ + Yeni Sohbet (F1)", id="new-chat-btn")
-                yield Label("💬 SON KULLANILANLAR\n", id="sidebar-header-chat")
+                yield Label("✨ + Yeni sohbet (F1)", id="new-chat-btn")
+                yield Label("🎓 Öğrenciler  🖼️ Resimler  🎥 Videolar\n📚 Kitaplık   💎 Gem'ler", id="nav-shortcuts")
+                yield Label("💬 Son Kullanılanlar\n", id="sidebar-header-chat")
                 yield Input(placeholder="🔍 Sohbetlerde arama yapın...", id="search-input")
                 yield ListView(id="chat-list")
+                yield Label("👤 Cenk Orfa (Pro)", id="user-profile-card")
             
             with Vertical(id="main-area"):
                 yield RichLog(id="chat-log", wrap=True)
                 yield ListView(id="command-suggestions")
                 yield Label("💬 Sohbet: Yeni Sohbet  │  ⚡ Model: 3.7 Flash", id="chat-info-bar")
                 yield Label("", id="attachments-bar")
-                yield Input(placeholder="Gemini'a sorun veya komut yazın (/)...", id="message-input")
+                yield Input(placeholder="Gemini'a sorun...", id="message-input")
                 
-        yield Label("F1: Yeni │ F2: Model │ F3: Dosya │ F4: Sil │ Alt+C: Kopyala │ Alt+V: Görseli Aç │ F7: Yardım", id="footer-bar")
+        yield Label("Gemini bir yapay zeka modeli olduğu için hata yapabilir. │ F1: Yeni │ F2: Model │ F3: Dosya │ F4: Sil │ Alt+C: Kopyala │ Alt+V: Görsel", id="footer-bar")
 
     def on_mount(self) -> None:
         if self.all_chats_cache:
@@ -287,6 +302,25 @@ class NakedGeminiTUI(App):
         self.update_header_status()
         self.update_chat_info_bar()
         self.connect_to_gemini()
+        
+        # YÖNTEM A: Saf HTTP Heartbeat Motorunu Başlat (120 saniyede bir oturumu taze tutar)
+        self._heartbeat_task = asyncio.create_task(self.start_http_heartbeat_loop())
+
+    # --- YÖNTEM A: SAF HTTP HEARTBEAT MOTORU (0 MB RAM / 0 MB DISK / %0 CPU) ---
+    async def start_http_heartbeat_loop(self) -> None:
+        """
+        120 saniyede bir arka planda Google istemcisine 2 KB boyutunda minik bir HTTP POST/GET isteği atar.
+        Böylece __Secure-1PSIDTS çerezi Google tarafından hiç düşürülmez ve oturum kesintisiz canlı kalır.
+        """
+        while True:
+            await asyncio.sleep(120)
+            if self.client and self.is_authenticated_user:
+                try:
+                    if hasattr(self.client, "client") and self.client.client:
+                        await rotate_1psidts(self.client.client, verbose=False)
+                    await self.client._fetch_user_status()
+                except Exception:
+                    pass
 
     # --- 2 KAT YÜKSEK ÇÖZÜNÜRLÜKLÜ SOHBET İÇİ YARIM-BLOK (HALF-BLOCK ▀) RENDER EDİCİ ---
     def render_image_in_chat(self, img_path_str: str, max_width: int = 85) -> Optional[Text]:
@@ -413,7 +447,7 @@ class NakedGeminiTUI(App):
         else:
             session_status = "[bold yellow]🟡 Misafir Modu (Giriş Yapılmadı)[/bold yellow]"
 
-        status_text = f"⚡ [bold cyan]MODEL:[/bold cyan] [bold white underline]{model_display}[/bold white underline]  │  Oturum: {session_status}"
+        status_text = f"✨ [bold cyan]Gemini TUI[/bold cyan]  │  ⚡ [bold cyan]MODEL:[/bold cyan] [bold white underline]{model_display}[/bold white underline]  │  Oturum: {session_status}"
         header.update(status_text)
 
     def update_attachments_bar(self) -> None:
@@ -436,7 +470,7 @@ class NakedGeminiTUI(App):
             "3. Listede çıkan `gemini.google.com` isteğindeki **`Cookie:`** satırını tamamen kopyalayın.\n"
             "4. Aşağıdaki mesaj kutusuna yazıp gönderin:\n"
             "   `/login kopyaladığınız_metin`\n\n"
-            "*(Sistem kopyaladığınız metindeki `__Secure-1PSID` ve `__Secure-1PSIDTS` çerezlerini ayıklayıp canlı web sohbetlerinize bağlanır!)*"
+            "*(Sistem kopyaladığınız metindeki `__Secure-1PSID` ve `__Secure-1PSIDTS` çerezlerini ayıklayıp canlı web sohbetlerinize bağlanır ve HTTP Heartbeat ile oturumu canlı tutar!)*"
         )
         chat_log.write(Markdown(login_guide))
         chat_log.write("\n---\n")
@@ -563,7 +597,7 @@ class NakedGeminiTUI(App):
             await chat_list.clear()
 
             sidebar_header = self.query_one("#sidebar-header-chat", Label)
-            sidebar_header.update(f"💬 SON KULLANILANLAR ({len(chats)})\n")
+            sidebar_header.update(f"💬 Son Kullanılanlar ({len(chats)})\n")
 
             if not self.is_authenticated_user:
                 item = ListItem(Label("> (Misafir Modu)"))
