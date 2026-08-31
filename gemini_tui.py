@@ -44,11 +44,13 @@ IMAGES_DIR = CACHE_DIR / "images"
 CONFIG_DIR = Path.home() / ".config" / "gemini_tui"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
-# Temiz, Saf Chatbot Komut Listesi
+# Temiz, Saf Chatbot Komut Listesi (İçe/Dışa Aktarma Dahil)
 COMMANDS_LIST = [
     ("/help", "Kullanım yardımını ve komut listesini gösterir"),
     ("/new", "Yeni temiz bir sohbet başlatır"),
     ("/model", "AI modelleri arasında geçiş yapar (3.7 Flash, 3.1 Pro, 3.5 Flash-Lite)"),
+    ("/export <dosya>", "Aktif sohbeti Markdown (.md) dosyası olarak kaydeder"),
+    ("/import <dosya>", "Kaydedilmiş sohbet dosyasını yükler ve bağlamı canlı oturuma aktarır"),
     ("/file <yol>", "Görsel (PNG/JPG/WEBP), PDF veya kod/metin dosyası ekler (F3/Alt+F)"),
     ("/view", "Son üretilen görseli mpv ile tam çözünürlükte açar (Alt+V)"),
     ("/copy", "En son verilen yanıtı panoya kopyalar (Alt+C)"),
@@ -660,6 +662,8 @@ class NakedGeminiTUI(App):
                     msg_input.value = "/rename "
                 elif cmd == "/login <1PSID> <1PSIDTS>":
                     msg_input.value = "/login "
+                elif cmd in ["/import <dosya>", "/export <dosya>"]:
+                    msg_input.value = cmd.split()[0] + " "
                 elif cmd == "/view":
                     msg_input.value = "/view"
                 else:
@@ -674,6 +678,137 @@ class NakedGeminiTUI(App):
                 title = getattr(event.item, "title_text", "Sohbet")
                 self.load_historical_chat(chat_id, title)
                 self.query_one("#message-input", Input).focus()
+
+    # --- SOHBETİ DISA AKTARMA (/export) ---
+    def action_export_chat(self, filename: str = "") -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        if not self.active_chat:
+            chat_log.write(Markdown("⚠️ **Dışa aktarılacak aktif sohbet bulunamadı.**"))
+            chat_log.write("\n")
+            chat_log.scroll_end(animate=False)
+            return
+
+        if not filename:
+            now_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            clean_title = "".join(c if c.isalnum() else "_" for c in self.active_chat_title)[:25]
+            filename = f"Gemini_Sohbet_{clean_title}_{now_str}.md"
+
+        export_path = Path.cwd() / filename
+        asyncio.create_task(self._do_export_file(export_path))
+
+    async def _do_export_file(self, export_path: Path) -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        try:
+            cid = self.active_chat.cid if self.active_chat else ""
+            history = await self.client.read_chat(cid, limit=150) if (self.client and cid) else None
+            
+            content = f"# 🤖 GeminiTUI Sohbet Raporu\n"
+            content += f"- **Başlık:** {self.active_chat_title}\n"
+            content += f"- **Model:** {self.get_current_model_display_name()}\n"
+            content += f"- **Tarih:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            content += f"- **Sohbet ID:** `{cid}`\n\n"
+            content += "---\n\n"
+            
+            if history and history.turns:
+                for turn in reversed(history.turns):
+                    role_name = "👤 Sen" if turn.role == "user" else "🤖 Gemini"
+                    content += f"### {role_name}\n\n{turn.text}\n\n---\n\n"
+            elif self.last_gemini_response:
+                content += f"### 👤 Sen\n\n{self.last_user_prompt}\n\n---\n\n"
+                content += f"### 🤖 Gemini\n\n{self.last_gemini_response}\n\n---\n\n"
+                
+            with open(export_path, "w", encoding="utf-8") as f:
+                f.write(content)
+                
+            chat_log.write(Markdown(f"💾 **Sohbet dışa aktarıldı:** `{export_path.name}` (`{export_path}`)"))
+            chat_log.write("\n")
+        except Exception as e:
+            chat_log.write(Markdown(f"⚠️ **Dışa aktarma hatası:** `{str(e)}`"))
+            chat_log.write("\n")
+        chat_log.scroll_end(animate=False)
+
+    # --- SOHBET DOSYASI İÇE AKTARMA VE CANLI BAĞLAM RESTORE ETME (/import) ---
+    def action_import_chat(self, filepath_str: str) -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        if not filepath_str:
+            chat_log.write(Markdown("⚠️ **Lütfen bir dosya yolu belirtin:** `/import sohbet_dosyasi.md`"))
+            chat_log.write("\n")
+            chat_log.scroll_end(animate=False)
+            return
+
+        import_path = Path(filepath_str.strip("'\"")).expanduser()
+        if not import_path.exists():
+            chat_log.write(Markdown(f"⚠️ **Dosya bulunamadı:** `{filepath_str}`"))
+            chat_log.write("\n")
+            chat_log.scroll_end(animate=False)
+            return
+
+        asyncio.create_task(self._do_import_file(import_path))
+
+    async def _do_import_file(self, import_path: Path) -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        try:
+            with open(import_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            sections = re.split(r'### (👤 Sen|🤖 Gemini)\n\n', content)
+            imported_turns = []
+            for i in range(1, len(sections), 2):
+                role_raw = sections[i]
+                text = sections[i+1].split('\n\n---\n\n')[0].strip()
+                role = "user" if "Sen" in role_raw else "model"
+                imported_turns.append((role, text))
+
+            if not imported_turns:
+                user_blocks = re.findall(r"(?:### 👤 Sen|User:)\s*\n+(.*?)(?=\n+###|\n+🤖|\n+Gemini:|$)", content, re.DOTALL)
+                gemini_blocks = re.findall(r"(?:### 🤖 Gemini|Gemini:)\s*\n+(.*?)(?=\n+###|\n+👤|\n+User:|$)", content, re.DOTALL)
+                for u, g in zip(user_blocks, gemini_blocks):
+                    imported_turns.append(("user", u.strip()))
+                    imported_turns.append(("model", g.strip()))
+
+            if not imported_turns:
+                chat_log.write(Markdown("⚠️ **Dosya içerisinde geçerli sohbet turu bulunamadı.**"))
+                chat_log.write("\n")
+                chat_log.scroll_end(animate=False)
+                return
+
+            selected_model = self.available_models[self.active_model_idx] if self.available_models else None
+            self.active_chat = self.client.start_chat(model=selected_model) if self.client else None
+            self.active_chat_title = f"İçeri Aktarıldı: {import_path.stem}"
+            self.update_chat_info_bar()
+
+            chat_log.clear()
+            chat_log.write(Markdown(f"📥 **Sohbet geçmişi içeri aktarıldı:** `{import_path.name}` ({len(imported_turns)} mesaj)"))
+            chat_log.write("\n---\n")
+
+            history_summary = []
+            for role, text in imported_turns:
+                if role == "user":
+                    chat_log.write(Markdown(f"**Sen:** {text}"))
+                    chat_log.write("\n")
+                    history_summary.append(f"User: {text}")
+                else:
+                    self.last_gemini_response = text
+                    chat_log.write(Text("Gemini:", style="bold green"))
+                    chat_log.write(Markdown(text))
+                    chat_log.write("\n---\n")
+                    history_summary.append(f"Gemini: {text}")
+
+            chat_log.scroll_end(animate=False)
+
+            # Live Context Injection into Gemini Session
+            if self.active_chat:
+                context_prompt = (
+                    "[ÖNEMLİ SİSTEM TALİMATI: Aşağıdaki metin geçmiş sohbet kaydımızdır. "
+                    "Lütfen bu geçmişi aktif sohbet oturumunun resmi bağlamı olarak kabul et ve sonraki mesajlarıma bu bağlamı sürdürerek yanıt ver]:\n\n"
+                    + "\n\n".join(history_summary[-10:])
+                )
+                asyncio.create_task(self.active_chat.send_message(context_prompt))
+
+        except Exception as e:
+            chat_log.write(Markdown(f"⚠️ **İçeri aktarma hatası:** `{str(e)}`"))
+            chat_log.write("\n")
+            chat_log.scroll_end(animate=False)
 
     # --- PANOYA KOPYALAMA (Alt+C / /copy) ---
     def action_copy_last_response(self) -> None:
@@ -809,6 +944,8 @@ class NakedGeminiTUI(App):
             "- **F1** veya **Alt+N** veya `/new` : Yeni sohbet başlatır.\n"
             "- **F2** veya **Alt+M** veya `/model` : AI Modelleri arasında geçiş yapar.\n"
             "- **F3** veya **Alt+F** veya `/file <yol>` : Görsel (PNG/JPG/WEBP), PDF veya metin dosyası ekler.\n"
+            "- `/export <dosya>` : Aktif sohbeti Markdown (.md) dosyası olarak kaydeder.\n"
+            "- `/import <dosya>` : Kaydedilmiş sohbet dosyasını yükler ve canlı oturum bağlamına aktarır.\n"
             "- **F4** veya **Alt+D** veya `/delete` : Aktif sohbeti hesabınızdan siler.\n"
             "- **Alt+C** veya `/copy` : En son verilen yanıtı panoya kopyalar.\n"
             "- **Alt+V** veya `/view` : Üretilen görseli mpv ile tam çözünürlükte açar.\n"
@@ -852,6 +989,17 @@ class NakedGeminiTUI(App):
                 chat_log.write(Markdown("⚠️ **Kullanım:** `/login <GEMINI_1PSID> <GEMINI_1PSIDTS>`"))
                 chat_log.write("\n")
                 chat_log.scroll_end(animate=False)
+            return
+
+        if text.startswith("/import "):
+            fpath = text.split(" ", 1)[1].strip()
+            self.action_import_chat(fpath)
+            return
+
+        if text.startswith("/export") or text.startswith("/save"):
+            parts = text.split(" ", 1)
+            fname = parts[1].strip() if len(parts) > 1 else ""
+            self.action_export_chat(fname)
             return
 
         if text.startswith("/view"):
