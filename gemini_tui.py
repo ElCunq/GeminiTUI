@@ -277,7 +277,7 @@ class NakedGeminiTUI(App):
         overflow: hidden;
     }
     
-    /* ÜST BAŞLIK BARI (HEADER) */
+    /* 1. HEADER SEKTÖRÜ */
     #header-container {
         height: 1;
         layout: horizontal;
@@ -310,14 +310,14 @@ class NakedGeminiTUI(App):
         text-style: bold;
     }
 
-    /* ANA BÖLGE (BODY) */
+    /* 2. ANA GÖVDE SEKTÖRÜ */
     #body-container { 
         height: 1fr; 
         layout: horizontal; 
         overflow: hidden;
     }
     
-    /* SOL KENAR ÇUBUĞU (SIDEBAR) */
+    /* 3. SOL KENAR ÇUBUĞU SEKTÖRÜ (SIDEBAR) */
     #sidebar { 
         width: 34; 
         height: 100%; 
@@ -354,7 +354,7 @@ class NakedGeminiTUI(App):
         scrollbar-size: 1 1;
     }
 
-    /* SAĞ ANA ALAN (MAIN VIEWPORT) */
+    /* 4. SAĞ ANA VİEWPORT SEKTÖRÜ */
     #main-area { 
         width: 1fr; 
         height: 100%; 
@@ -362,13 +362,29 @@ class NakedGeminiTUI(App):
         padding: 0 1; 
         overflow: hidden;
     }
+
+    /* KART AKSİYON BUTONLARI (ÜSTTE SABİT, HİÇ KAYMAZ) */
+    #chat-action-buttons {
+        height: 1;
+        layout: horizontal;
+        margin-bottom: 1;
+        padding: 0 1;
+        border-bottom: solid #222222;
+    }
+    .action-btn {
+        width: 18;
+        height: 1;
+        color: #00ffcc;
+        margin-right: 2;
+    }
+
     #chat-log { 
         height: 1fr; 
         margin-bottom: 1;
         scrollbar-size: 1 1; 
     }
     
-    /* AÇILIR POPUP MENÜLER (YÜZEN KATMAN OVERLAY - HİÇBİR ŞEYİ KAYDIRMAZ) */
+    /* AÇILIR MENÜ VE POPUP KATMANLARI */
     #top-dropdown-menu {
         height: 5;
         width: 32;
@@ -379,15 +395,21 @@ class NakedGeminiTUI(App):
         margin-top: 1;
     }
 
-    #model-dropdown-menu {
-        dock: bottom;
-        width: 34;
+    #model-popup-container {
         height: 5;
-        margin-bottom: 5;
-        margin-right: 15;
+        layout: horizontal;
+        display: none;
+        margin-bottom: 1;
+    }
+    #popup-spacer {
+        width: 1fr;
+    }
+    #model-dropdown-menu {
+        height: 5;
+        width: 34;
         border: double #00ffcc;
         background: #111111;
-        display: none;
+        margin-right: 15;
     }
     #model-dropdown-menu ListItem {
         padding: 0;
@@ -401,20 +423,6 @@ class NakedGeminiTUI(App):
         background: #111111;
         display: none;
         margin-bottom: 1;
-    }
-
-    /* KART MENÜLERİ VE AKSİYON BUTONLARI */
-    #chat-action-buttons {
-        height: 1;
-        layout: horizontal;
-        margin-bottom: 1;
-        padding: 0 1;
-    }
-    .action-btn {
-        width: 18;
-        height: 1;
-        color: #00ffcc;
-        margin-right: 2;
     }
 
     #chat-info-bar { 
@@ -433,7 +441,7 @@ class NakedGeminiTUI(App):
         margin-bottom: 1;
     }
 
-    /* ALT GİRDİ ÇUBUĞU (INPUT BAR) */
+    /* 5. ALT GİRDİ SEKTÖRÜ (INPUT BAR) */
     #input-container {
         height: 4;
         layout: horizontal;
@@ -479,6 +487,7 @@ class NakedGeminiTUI(App):
         text-style: bold;
     }
 
+    /* 6. EN ALT BİLGİ BARI SEKTÖRÜ */
     #footer-bar {
         height: 1;
         color: #888888;
@@ -544,21 +553,23 @@ class NakedGeminiTUI(App):
                 yield ListView(id="recent-list")
             
             with Vertical(id="main-area"):
-                yield RichLog(id="chat-log", wrap=True)
-                
                 with Horizontal(id="chat-action-buttons"):
                     yield Button("[📋 Kopyala]", id="act-copy-btn", classes="action-btn")
                     yield Button("[🔍 Metni İncele]", id="act-inspect-btn", classes="action-btn")
                     yield Button("[🔄 Yeniden Oluştur]", id="act-retry-btn", classes="action-btn")
                     yield Button("[✏️ Düzenle]", id="act-edit-btn", classes="action-btn")
 
+                yield RichLog(id="chat-log", wrap=True)
                 yield ListView(id="top-dropdown-menu")
-                yield ListView(id="model-dropdown-menu")
                 yield ListView(id="command-suggestions")
                 
                 yield Label("💬 Sohbet: Yeni Sohbet  │  ⚡ Model: 3.7 Flash", id="chat-info-bar")
                 yield Label("", id="attachments-bar")
                 
+                with Horizontal(id="model-popup-container"):
+                    yield Label("", id="popup-spacer")
+                    yield ListView(id="model-dropdown-menu")
+
                 with Horizontal(id="input-container"):
                     yield Button("[+]", id="add-file-btn")
                     ta = PromptTextArea(id="prompt-text-area")
@@ -805,13 +816,14 @@ class NakedGeminiTUI(App):
         top_menu.display = True
 
     def toggle_model_menu(self) -> None:
-        model_menu = self.query_one("#model-dropdown-menu", ListView)
-        if model_menu.display:
-            model_menu.display = False
+        container = self.query_one("#model-popup-container", Horizontal)
+        if container.display:
+            container.display = False
         else:
             asyncio.create_task(self._render_model_menu_items())
 
     async def _render_model_menu_items(self) -> None:
+        container = self.query_one("#model-popup-container", Horizontal)
         model_menu = self.query_one("#model-dropdown-menu", ListView)
         await model_menu.clear()
         
@@ -824,7 +836,7 @@ class NakedGeminiTUI(App):
             items.append(item)
             
         await model_menu.mount(*items)
-        model_menu.display = True
+        container.display = True
 
     # --- 2 KAT YÜKSEK ÇÖZÜNÜRLÜKLÜ SOHBET İÇİ YARIM-BLOK (HALF-BLOCK ▀) RENDER EDİCİ ---
     def render_image_in_chat(self, img_path_str: str, max_width: int = 85) -> Optional[Text]:
@@ -1257,7 +1269,7 @@ class NakedGeminiTUI(App):
         if list_id == "model-dropdown-menu":
             idx = getattr(event.item, "model_index", 0)
             self.active_model_idx = idx
-            self.query_one("#model-dropdown-menu", ListView).display = False
+            self.query_one("#model-popup-container", Horizontal).display = False
             
             new_m = self.available_models[self.active_model_idx]
             if self.active_chat:
