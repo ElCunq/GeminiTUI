@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any, Union
 
 from textual.app import App, ComposeResult
+from textual.screen import ModalScreen
 from textual.containers import Horizontal, Vertical, Container
 from textual.widgets import ListView, ListItem, Label, Input, RichLog, Button, TextArea
 from textual.binding import Binding
@@ -223,6 +224,63 @@ def parse_cookie_input(raw_text: str):
             
     return psid, psidts, psidcc
 
+# --- ÜST KATMAN POPUP SEÇİM PENCERESİ (MODAL OVERLAY SCREEN) ---
+class ModelSelectModal(ModalScreen[Optional[int]]):
+    BINDINGS = [Binding("escape", "close_modal", "Kapat", priority=True)]
+    
+    CSS = """
+    ModelSelectModal {
+        align: right bottom;
+        background: transparent;
+    }
+    #modal-box {
+        width: 36;
+        height: 7;
+        margin-right: 15;
+        margin-bottom: 5;
+        border: double #00ffcc;
+        background: #111111;
+    }
+    #modal-title {
+        color: #00ffcc;
+        text-style: bold;
+        border-bottom: solid #333333;
+        padding: 0 1;
+    }
+    #model-list ListItem {
+        padding: 0 1;
+        height: 1;
+    }
+    ListItem:hover {
+        color: #00ffcc;
+        text-style: bold;
+    }
+    """
+
+    def __init__(self, models: List[Any], active_idx: int):
+        super().__init__()
+        self.models = models
+        self.active_idx = active_idx
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Label("⚡ AI Modeli Seçin", id="modal-title")
+            items = []
+            for idx, m in enumerate(self.models):
+                display = m.display_name if hasattr(m, "display_name") else str(m)
+                prefix = "● " if idx == self.active_idx else "○ "
+                item = ListItem(Label(f"{prefix}{display}"))
+                item.model_idx = idx
+                items.append(item)
+            yield ListView(*items, id="model-list")
+
+    def action_close_modal(self) -> None:
+        self.dismiss(None)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        idx = getattr(event.item, "model_idx", None)
+        self.dismiss(idx)
+
 # --- ÇOK SATIRLI ÇOKLU GİRDİ VE BELİRGİN İMLEÇ (TEXTAREA) ---
 class PromptTextArea(TextArea):
     def on_mount(self) -> None:
@@ -369,7 +427,7 @@ class NakedGeminiTUI(App):
         scrollbar-size: 1 1; 
     }
 
-    /* KART AKSİYON BUTONLARI (LOG ALTINDA CANLI GÖRÜNÜR) */
+    /* KART AKSİYON BUTONLARI */
     #chat-action-buttons {
         height: 1;
         layout: horizontal;
@@ -383,7 +441,6 @@ class NakedGeminiTUI(App):
         margin-right: 2;
     }
 
-    /* AÇILIR MENÜ VE TAM SÜZÜLEN MODEL POPUP (DOCK BOTTOM MARGIN RIGHT - SIFIR KAYMA) */
     #top-dropdown-menu {
         height: 5;
         width: 32;
@@ -392,22 +449,6 @@ class NakedGeminiTUI(App):
         background: #111111;
         display: none;
         margin-top: 1;
-    }
-
-    #model-dropdown-menu {
-        dock: bottom;
-        width: 34;
-        height: 5;
-        margin-bottom: 6;
-        margin-right: 15;
-        border: double #00ffcc;
-        background: #111111;
-        display: none;
-    }
-    #model-dropdown-menu ListItem {
-        padding: 0;
-        margin: 0;
-        height: 1;
     }
 
     #command-suggestions {
@@ -569,7 +610,6 @@ class NakedGeminiTUI(App):
                     yield Button("[ Gönder ⏎ ]", id="send-stop-btn")
 
                 yield Label("💡 İpucu: Alt satıra geçmek için: Shift+Enter / Alt+Enter / ' \\ ' + Enter │ Metin Seçme: Shift + Sol Tık Sürükle", id="footer-bar")
-                yield ListView(id="model-dropdown-menu")
 
     def on_mount(self) -> None:
         if self.all_chats_cache:
@@ -806,27 +846,18 @@ class NakedGeminiTUI(App):
         await top_menu.mount(*items)
         top_menu.display = True
 
+    # --- MODAL SCREEN İLE ÜST KATMAN POPUP POPUP MENÜ ---
     def toggle_model_menu(self) -> None:
-        model_menu = self.query_one("#model-dropdown-menu", ListView)
-        if model_menu.display:
-            model_menu.display = False
-        else:
-            asyncio.create_task(self._render_model_menu_items())
+        def _on_model_selected(selected_idx: Optional[int]) -> None:
+            if selected_idx is not None and 0 <= selected_idx < len(self.available_models):
+                self.active_model_idx = selected_idx
+                new_m = self.available_models[self.active_model_idx]
+                if self.active_chat:
+                    self.active_chat.model = new_m
+                self.update_header_status()
+                self.update_chat_info_bar()
 
-    async def _render_model_menu_items(self) -> None:
-        model_menu = self.query_one("#model-dropdown-menu", ListView)
-        await model_menu.clear()
-        
-        items = []
-        for idx, m in enumerate(self.available_models):
-            display = m.display_name if hasattr(m, "display_name") else str(m)
-            prefix = "● " if idx == self.active_model_idx else "○ "
-            item = ListItem(Label(f"{prefix}{display}"))
-            item.model_index = idx
-            items.append(item)
-            
-        await model_menu.mount(*items)
-        model_menu.display = True
+        self.push_screen(ModelSelectModal(self.available_models, self.active_model_idx), _on_model_selected)
 
     # --- 2 KAT YÜKSEK ÇÖZÜNÜRLÜKLÜ SOHBET İÇİ YARIM-BLOK (HALF-BLOCK ▀) RENDER EDİCİ ---
     def render_image_in_chat(self, img_path_str: str, max_width: int = 85) -> Optional[Text]:
@@ -1254,18 +1285,6 @@ class NakedGeminiTUI(App):
                 chat_log.write(Markdown("📊 **Token ve Kullanım Bilgisi:** Sınırsız Web İstemci Modu (Compute Limit: Aktif)"))
                 chat_log.write("\n")
                 chat_log.scroll_end(animate=False)
-            return
-
-        if list_id == "model-dropdown-menu":
-            idx = getattr(event.item, "model_index", 0)
-            self.active_model_idx = idx
-            self.query_one("#model-dropdown-menu", ListView).display = False
-            
-            new_m = self.available_models[self.active_model_idx]
-            if self.active_chat:
-                self.active_chat.model = new_m
-            self.update_header_status()
-            self.update_chat_info_bar()
             return
 
         if list_id == "command-suggestions":
