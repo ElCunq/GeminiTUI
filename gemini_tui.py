@@ -368,7 +368,7 @@ class NakedGeminiTUI(App):
         scrollbar-size: 1 1; 
     }
     
-    /* AÇILIR POPUP MENÜLER (HİZALANMIŞ ÜST POPUP) */
+    /* AÇILIR POPUP MENÜLER (YÜZEN KATMAN OVERLAY - HİÇBİR ŞEYİ KAYDIRMAZ) */
     #top-dropdown-menu {
         height: 5;
         width: 32;
@@ -379,21 +379,20 @@ class NakedGeminiTUI(App):
         margin-top: 1;
     }
 
-    #model-popup-container {
-        height: 5;
-        layout: horizontal;
-        display: none;
-        margin-bottom: 1;
-    }
-    #popup-spacer {
-        width: 1fr;
-    }
     #model-dropdown-menu {
-        height: 5;
+        dock: bottom;
         width: 34;
+        height: 5;
+        margin-bottom: 5;
+        margin-right: 15;
         border: double #00ffcc;
         background: #111111;
-        margin-right: 15;
+        display: none;
+    }
+    #model-dropdown-menu ListItem {
+        padding: 0;
+        margin: 0;
+        height: 1;
     }
 
     #command-suggestions {
@@ -554,12 +553,9 @@ class NakedGeminiTUI(App):
                     yield Button("[✏️ Düzenle]", id="act-edit-btn", classes="action-btn")
 
                 yield ListView(id="top-dropdown-menu")
+                yield ListView(id="model-dropdown-menu")
                 yield ListView(id="command-suggestions")
                 
-                with Horizontal(id="model-popup-container"):
-                    yield Label("", id="popup-spacer")
-                    yield ListView(id="model-dropdown-menu")
-
                 yield Label("💬 Sohbet: Yeni Sohbet  │  ⚡ Model: 3.7 Flash", id="chat-info-bar")
                 yield Label("", id="attachments-bar")
                 
@@ -809,14 +805,13 @@ class NakedGeminiTUI(App):
         top_menu.display = True
 
     def toggle_model_menu(self) -> None:
-        container = self.query_one("#model-popup-container", Horizontal)
-        if container.display:
-            container.display = False
+        model_menu = self.query_one("#model-dropdown-menu", ListView)
+        if model_menu.display:
+            model_menu.display = False
         else:
             asyncio.create_task(self._render_model_menu_items())
 
     async def _render_model_menu_items(self) -> None:
-        container = self.query_one("#model-popup-container", Horizontal)
         model_menu = self.query_one("#model-dropdown-menu", ListView)
         await model_menu.clear()
         
@@ -829,7 +824,7 @@ class NakedGeminiTUI(App):
             items.append(item)
             
         await model_menu.mount(*items)
-        container.display = True
+        model_menu.display = True
 
     # --- 2 KAT YÜKSEK ÇÖZÜNÜRLÜKLÜ SOHBET İÇİ YARIM-BLOK (HALF-BLOCK ▀) RENDER EDİCİ ---
     def render_image_in_chat(self, img_path_str: str, max_width: int = 85) -> Optional[Text]:
@@ -1262,7 +1257,7 @@ class NakedGeminiTUI(App):
         if list_id == "model-dropdown-menu":
             idx = getattr(event.item, "model_index", 0)
             self.active_model_idx = idx
-            self.query_one("#model-popup-container", Horizontal).display = False
+            self.query_one("#model-dropdown-menu", ListView).display = False
             
             new_m = self.available_models[self.active_model_idx]
             if self.active_chat:
