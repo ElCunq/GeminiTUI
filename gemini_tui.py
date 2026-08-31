@@ -4,8 +4,9 @@ import json
 import time
 import asyncio
 import pathlib
-import subprocess
+import sqlite3
 import shutil
+import subprocess
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,15 @@ try:
     from PIL import Image as PILImage
 except ImportError:
     PILImage = None
+
+try:
+    import secretstorage
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    HAS_NATIVE_DECRYPT = True
+except ImportError:
+    HAS_NATIVE_DECRYPT = False
 
 from gemini_webapi import GeminiClient
 from gemini_webapi.types.availablemodel import AvailableModel
@@ -48,7 +58,7 @@ COMMANDS_LIST = [
     ("/help", "Kullanım yardımını ve komut listesini gösterir"),
     ("/new", "Yeni temiz bir sohbet başlatır"),
     ("/model", "AI modelleri arasında geçiş yapar (3.7 Flash, 3.1 Pro, 3.5 Flash-Lite)"),
-    ("/login [Çerez]", "Tarayıcıda gemini.google.com açar ve otomatik oturum tarar"),
+    ("/login", "Çerezleri otomatik tarar ve hesaba doğrudan bağlanır"),
     ("/export <dosya>", "Aktif sohbeti Markdown (.md) dosyası olarak kaydeder"),
     ("/import <dosya>", "Kaydedilmiş sohbet dosyasını yükler ve bağlamı canlı oturuma aktarır"),
     ("/file <yol>", "Görsel (PNG/JPG/WEBP), PDF veya metin dosyası ekler (F3/Alt+F)"),
@@ -60,6 +70,86 @@ COMMANDS_LIST = [
     ("/clear", "Eklenmiş dosyaları temizler"),
     ("/exit", "Uygulamadan çıkış yapar"),
 ]
+
+def get_linux_dbus_secret(label: str) -> Optional[bytes]:
+    if not HAS_NATIVE_DECRYPT:
+        return None
+    try:
+        bus = secretstorage.dbus_init()
+        collection = secretstorage.get_default_collection(bus)
+        for item in collection.get_all_items():
+            if item.get_label() == label:
+                return item.get_secret()
+    except Exception:
+        pass
+    return None
+
+def decrypt_chrome_cookie_linux(encrypted_val: bytes, key_secret: bytes) -> str:
+    if not encrypted_val or not key_secret:
+        return ""
+    try:
+        if encrypted_val[:3] in [b'v10', b'v11']:
+            encrypted_val = encrypted_val[3:]
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA1(),
+            length=16,
+            salt=b'saltysalt',
+            iterations=1,
+        )
+        key = kdf.derive(key_secret)
+        iv = b' ' * 16
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+        decryptor = cipher.decryptor()
+        decrypted = decryptor.update(encrypted_val) + decryptor.finalize()
+        
+        if len(decrypted) > 32:
+            val = decrypted[32:].decode('utf-8', errors='ignore')
+            val = re.sub(r'[\x00-\x1f\x7f-\xff]+.*$', '', val)
+            return val
+    except Exception:
+        pass
+    return ""
+
+def auto_extract_native_linux_cookies() -> Dict[str, str]:
+    extracted = {}
+    
+    candidate_paths = [
+        ("Brave Safe Storage", Path.home() / ".config/BraveSoftware/Brave-Origin/Default/Cookies"),
+        ("Brave Safe Storage", Path.home() / ".config/BraveSoftware/Brave-Browser/Default/Cookies"),
+        ("Chrome Safe Storage", Path.home() / ".config/google-chrome/Default/Cookies"),
+        ("Chromium Safe Storage", Path.home() / ".config/chromium/Default/Cookies"),
+    ]
+    
+    for label, cookie_path in candidate_paths:
+        if not cookie_path.exists():
+            continue
+        secret = get_linux_dbus_secret(label)
+        if not secret:
+            continue
+            
+        try:
+            tmp_copy = Path("/tmp/tui_cookie_scan.db")
+            shutil.copy2(cookie_path, tmp_copy)
+            conn = sqlite3.connect(tmp_copy)
+            c = conn.cursor()
+            c.execute("SELECT name, encrypted_value, host_key FROM cookies WHERE host_key LIKE '%google.com%'")
+            for name, enc_val, host in c.fetchall():
+                if '1PSID' in name and host in ['.google.com', 'google.com']:
+                    dec = decrypt_chrome_cookie_linux(enc_val, secret)
+                    if dec and len(dec) > 10:
+                        extracted[name] = dec
+            conn.close()
+            try:
+                tmp_copy.unlink()
+            except Exception:
+                pass
+                
+            if extracted.get("__Secure-1PSID"):
+                break
+        except Exception:
+            pass
+            
+    return extracted
 
 def load_cookie_credentials():
     psid = os.getenv("GEMINI_1PSID", None)
@@ -78,6 +168,14 @@ def load_cookie_credentials():
                     psidcc = data.get("GEMINI_1PSIDCC") or data.get("1PSIDCC")
         except Exception:
             pass
+
+    if not psid:
+        native_cookies = auto_extract_native_linux_cookies()
+        if native_cookies.get("__Secure-1PSID"):
+            psid = native_cookies.get("__Secure-1PSID")
+            psidts = native_cookies.get("__Secure-1PSIDTS")
+            psidcc = native_cookies.get("__Secure-1PSIDCC")
+            save_cookie_credentials(psid, psidts, psidcc)
             
     return psid, psidts, psidcc
 
@@ -682,6 +780,20 @@ class NakedGeminiTUI(App):
 
     def trigger_auto_browser_login(self) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
+        
+        # Native Linux Cookie Taramasını Dene
+        native_cookies = auto_extract_native_linux_cookies()
+        if native_cookies.get("__Secure-1PSID"):
+            psid = native_cookies.get("__Secure-1PSID")
+            psidts = native_cookies.get("__Secure-1PSIDTS")
+            psidcc = native_cookies.get("__Secure-1PSIDCC")
+            save_cookie_credentials(psid, psidts, psidcc)
+            chat_log.write(Markdown("🎉 **Sistemdeki tarayıcınızdan (Brave/Chrome) Google oturum çerezleri 0-tık ile otomatik olarak algılandı ve bağlandı!**"))
+            chat_log.write("\n---\n")
+            chat_log.scroll_end(animate=False)
+            self.connect_to_gemini()
+            return
+
         chat_log.write(Markdown("🌐 **Varsayılan tarayıcınızda `gemini.google.com` adresi açılıyor...**"))
         chat_log.write(Markdown("⌛ *Google hesabınız arka planda taranıyor (30 saniye)...*"))
         chat_log.write("\n")
@@ -701,25 +813,17 @@ class NakedGeminiTUI(App):
         while time.time() - start_t < 30:
             await asyncio.sleep(2.5)
             try:
-                temp_client = GeminiClient(auto_cookies=True)
-                await temp_client.init(timeout=10, auto_close=False, auto_refresh=True)
-                
-                await temp_client._fetch_recent_chats(recent=20)
-                chats = temp_client.list_chats() or []
-                
-                if chats:
-                    cookie_src = getattr(temp_client, "_cookie_source", "browser")
-                    psid = temp_client._cookies.get("__Secure-1PSID")
-                    psidts = temp_client._cookies.get("__Secure-1PSIDTS")
-                    psidcc = temp_client._cookies.get("__Secure-1PSIDCC")
-                    
-                    if psid:
-                        save_cookie_credentials(psid, psidts, psidcc)
-                        chat_log.write(Markdown(f"🎉 **Tebrikler! Google hesabınız `{cookie_src}` üzerinden otomatik olarak algılandı ve bağlandı!**"))
-                        chat_log.write("\n---\n")
-                        chat_log.scroll_end(animate=False)
-                        self.connect_to_gemini()
-                        return
+                native_cookies = auto_extract_native_linux_cookies()
+                if native_cookies.get("__Secure-1PSID"):
+                    psid = native_cookies.get("__Secure-1PSID")
+                    psidts = native_cookies.get("__Secure-1PSIDTS")
+                    psidcc = native_cookies.get("__Secure-1PSIDCC")
+                    save_cookie_credentials(psid, psidts, psidcc)
+                    chat_log.write(Markdown("🎉 **Tebrikler! Google hesabınız otomatik olarak algılandı ve bağlandı!**"))
+                    chat_log.write("\n---\n")
+                    chat_log.scroll_end(animate=False)
+                    self.connect_to_gemini()
+                    return
             except Exception:
                 pass
 
@@ -1155,7 +1259,7 @@ class NakedGeminiTUI(App):
             "- **F1** veya **Alt+N** veya `/new` : Yeni sohbet başlatır.\n"
             "- **F2** veya **Alt+M** veya `/model` : AI Modelleri arasında geçiş yapar.\n"
             "- **F3** veya **Alt+F** veya `/file <yol>` : Görsel (PNG/JPG/WEBP), PDF veya metin dosyası ekler.\n"
-            "- `/login` : Varsayılan tarayıcıda gemini.google.com açar ve otomatik bağlanır.\n"
+            "- `/login` : Tarayıcı çerezlerinizi otomatik algılar ve bağlanır.\n"
             "- `/export <dosya>` : Aktif sohbeti Markdown (.md) dosyası olarak kaydeder.\n"
             "- `/import <dosya>` : Kaydedilmiş sohbet dosyasını yükler ve canlı oturum bağlamına aktarır.\n"
             "- **F4** veya **Alt+D** veya `/delete` : Aktif sohbeti hesabınızdan siler.\n"
