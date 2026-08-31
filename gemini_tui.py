@@ -228,13 +228,26 @@ class PromptTextArea(TextArea):
     def on_mount(self) -> None:
         self.cursor_blink = True
 
-    def _on_key(self, event: Key) -> None:
-        if event.key == "enter" and not event.shift:
+    async def _on_key(self, event: Key) -> None:
+        key = event.key.lower()
+        
+        # Çok satırlı yeni satır tuş kombinasyonları: Shift+Enter, Alt+Enter, Ctrl+Enter, Escape+Enter, Ctrl+J
+        if key in ["shift+enter", "alt+enter", "ctrl+enter", "escape+enter", "ctrl+j"]:
+            self.insert("\n")
             event.prevent_default()
             event.stop()
-            self.app.handle_prompt_submit()
+        elif key == "enter":
+            current_text = self.text
+            if current_text.endswith("\\"):
+                self.text = current_text[:-1] + "\n"
+                event.prevent_default()
+                event.stop()
+            else:
+                event.prevent_default()
+                event.stop()
+                self.app.handle_prompt_submit()
         else:
-            super()._on_key(event)
+            await super()._on_key(event)
 
 class NakedGeminiTUI(App):
     BINDINGS = [
@@ -260,6 +273,8 @@ class NakedGeminiTUI(App):
     }
     Screen { 
         layout: vertical; 
+        height: 100%;
+        overflow: hidden;
     }
     
     /* ÜST BAŞLIK BARI (HEADER) */
@@ -298,6 +313,7 @@ class NakedGeminiTUI(App):
     #body-container { 
         height: 1fr; 
         layout: horizontal; 
+        overflow: hidden;
     }
     
     /* SOL KENAR ÇUBUĞU (SIDEBAR) */
@@ -343,6 +359,7 @@ class NakedGeminiTUI(App):
         height: 100%; 
         layout: vertical;
         padding: 0 1; 
+        overflow: hidden;
     }
     #chat-log { 
         height: 1fr; 
@@ -543,7 +560,7 @@ class NakedGeminiTUI(App):
                     yield Button("[🎙️]", id="voice-btn")
                     yield Button("[ Gönder ⏎ ]", id="send-stop-btn")
 
-                yield Label("💡 İpucu: Fareyle metin kopyalamak için: Shift + Sol Tık Sürükle │ F1: Yeni │ F2: Model │ F3: Dosya │ Alt+C: Kopyala │ Alt+V: Görsel", id="footer-bar")
+                yield Label("💡 İpucu: Alt satıra geçmek için: Shift+Enter / Alt+Enter / ' \\ ' + Enter │ Metin Seçme: Shift + Sol Tık Sürükle", id="footer-bar")
 
     def on_mount(self) -> None:
         if self.all_chats_cache:
@@ -1399,7 +1416,7 @@ class NakedGeminiTUI(App):
         help_md = (
             "### 💡 KULLANIM VE KOMUT YARDIMI\n\n"
             "- **Enter** : Mesajı gönderir.\n"
-            "- **Shift+Enter** : Girdi alanında alt satıra geçer.\n"
+            "- **Shift+Enter** veya **Alt+Enter** veya **'\\'+Enter** : Girdi alanında alt satıra geçer.\n"
             "- **Shift + Sol Tık Sürükle** : Terminal içinden doğrudan metin seçip kopyalar.\n"
             "- **F1** veya **Alt+N** veya `/new` : Yeni sohbet başlatır.\n"
             "- **F2** veya **Alt+M** veya `/model` : AI Modelleri arasında geçiş yapar.\n"
