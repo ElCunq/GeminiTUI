@@ -26,18 +26,11 @@ try:
 except ImportError:
     PILImage = None
 
-# Official Google GenAI SDK Support
-try:
-    from google import genai
-    from google.genai import types as genai_types
-    HAS_GENAI_SDK = True
-except ImportError:
-    HAS_GENAI_SDK = False
-
 from gemini_webapi import GeminiClient
 from gemini_webapi.types.availablemodel import AvailableModel
-from gemini_webapi.utils import set_log_level, logger
+from gemini_webapi.utils import set_log_level, logger, clear_cookies_cache
 
+# Terminal kirliliğini önlüyoruz
 set_log_level("ERROR")
 try:
     logger.remove()
@@ -54,8 +47,8 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 COMMANDS_LIST = [
     ("/help", "Kullanım yardımını ve komut listesini gösterir"),
     ("/new", "Yeni temiz bir sohbet başlatır"),
-    ("/model", "AI modelleri arasında geçiş yapar (gemini-2.5-flash, gemini-2.5-pro)"),
-    ("/login [API_KEY veya Çerez]", "API Key veya çerez metni girerek kesintisiz bağlanır"),
+    ("/model", "AI modelleri arasında geçiş yapar (3.7 Flash, 3.1 Pro, 3.5 Flash-Lite)"),
+    ("/login [Çerez]", "Tarayıcı çerezlerinizi manuel yapıştırarak giriş yapar"),
     ("/export <dosya>", "Aktif sohbeti Markdown (.md) dosyası olarak kaydeder"),
     ("/import <dosya>", "Kaydedilmiş sohbet dosyasını yükler ve bağlamı canlı oturuma aktarır"),
     ("/file <yol>", "Görsel (PNG/JPG/WEBP), PDF veya kod/metin dosyası ekler (F3/Alt+F)"),
@@ -68,8 +61,7 @@ COMMANDS_LIST = [
     ("/exit", "Uygulamadan çıkış yapar"),
 ]
 
-def load_credentials():
-    api_key = os.getenv("GEMINI_API_KEY", None)
+def load_cookie_credentials():
     psid = os.getenv("GEMINI_1PSID", None)
     psidts = os.getenv("GEMINI_1PSIDTS", None)
     psidcc = os.getenv("GEMINI_1PSIDCC", None)
@@ -78,8 +70,6 @@ def load_credentials():
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if not api_key:
-                    api_key = data.get("GEMINI_API_KEY") or data.get("API_KEY")
                 if not psid:
                     psid = data.get("GEMINI_1PSID") or data.get("1PSID")
                 if not psidts:
@@ -89,9 +79,9 @@ def load_credentials():
         except Exception:
             pass
             
-    return api_key, psid, psidts, psidcc
+    return psid, psidts, psidcc
 
-def save_credentials(api_key: Optional[str] = None, psid: Optional[str] = None, psidts: Optional[str] = None, psidcc: Optional[str] = None):
+def save_cookie_credentials(psid: str, psidts: Optional[str] = None, psidcc: Optional[str] = None):
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         data = {}
@@ -102,8 +92,6 @@ def save_credentials(api_key: Optional[str] = None, psid: Optional[str] = None, 
             except Exception:
                 pass
 
-        if api_key:
-            data["GEMINI_API_KEY"] = api_key.strip()
         if psid:
             data["GEMINI_1PSID"] = psid.strip()
         if psidts:
@@ -115,6 +103,27 @@ def save_credentials(api_key: Optional[str] = None, psid: Optional[str] = None, 
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+def parse_cookie_input(raw_text: str):
+    psid_m = re.search(r'__Secure-1PSID=([^;\s]+)', raw_text)
+    psidts_m = re.search(r'__Secure-1PSIDTS=([^;\s]+)', raw_text)
+    psidcc_m = re.search(r'__Secure-1PSIDCC=([^;\s]+)', raw_text)
+    
+    psid = psid_m.group(1) if psid_m else None
+    psidts = psidts_m.group(1) if psidts_m else None
+    psidcc = psidcc_m.group(1) if psidcc_m else None
+    
+    if not psid:
+        clean = raw_text.replace("/login", "").strip()
+        parts = clean.split()
+        if len(parts) >= 1:
+            psid = parts[0]
+        if len(parts) >= 2:
+            psidts = parts[1]
+        if len(parts) >= 3:
+            psidcc = parts[2]
+            
+    return psid, psidts, psidcc
 
 class NakedGeminiTUI(App):
     BINDINGS = [
@@ -233,18 +242,17 @@ class NakedGeminiTUI(App):
 
     def __init__(self):
         super().__init__()
-        self.web_client: Optional[GeminiClient] = None
-        self.genai_client: Optional[Any] = None
+        self.client: Optional[GeminiClient] = None
         self.active_chat = None
-        self.active_genai_chat = None
-        self.engine_mode: str = "WEB"  # "API_KEY" or "WEB"
-        
         self.active_chat_title: str = "Yeni Sohbet"
-        self.available_models: List[str] = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash-thinking-exp"]
+        
+        self.fallback_models = ["3.7 Flash", "3.1 Pro", "3.5 Flash-Lite"]
+        self.available_models: List[Any] = list(self.fallback_models)
         self.active_model_idx: int = 0
         
         self.attached_files: List[str] = []
         self.all_chats_cache: List[Dict[str, Any]] = []
+        self.is_authenticated_user: bool = False
         
         self.last_user_prompt: str = ""
         self.last_gemini_response: str = ""
@@ -266,7 +274,7 @@ class NakedGeminiTUI(App):
             with Vertical(id="main-area"):
                 yield RichLog(id="chat-log", wrap=True)
                 yield ListView(id="command-suggestions")
-                yield Label("💬 Sohbet: Yeni Sohbet  │  ⚡ Model: gemini-2.5-flash", id="chat-info-bar")
+                yield Label("💬 Sohbet: Yeni Sohbet  │  ⚡ Model: 3.7 Flash", id="chat-info-bar")
                 yield Label("", id="attachments-bar")
                 yield Input(placeholder="Gemini'a sorun veya komut yazın (/)...", id="message-input")
                 
@@ -342,10 +350,30 @@ class NakedGeminiTUI(App):
             except Exception:
                 pass
 
+    def select_default_model_flash_37(self) -> None:
+        if not self.available_models:
+            return
+        
+        for idx, m in enumerate(self.available_models):
+            display = m.display_name.lower() if hasattr(m, "display_name") else str(m).lower()
+            name = m.model_name.lower() if hasattr(m, "model_name") else str(m).lower()
+            if "3.7" in display or (name == "gemini-flash" and "lite" not in display):
+                self.active_model_idx = idx
+                return
+                
+        for idx, m in enumerate(self.available_models):
+            display = m.display_name.lower() if hasattr(m, "display_name") else str(m).lower()
+            if "flash" in display and "lite" not in display:
+                self.active_model_idx = idx
+                return
+
     def get_current_model_display_name(self) -> str:
         if self.available_models and 0 <= self.active_model_idx < len(self.available_models):
-            return str(self.available_models[self.active_model_idx])
-        return "gemini-2.5-flash"
+            m = self.available_models[self.active_model_idx]
+            if hasattr(m, "display_name"):
+                return m.display_name
+            return str(m)
+        return "3.7 Flash"
 
     # --- LOKAL CACHE İŞLEMLERİ ---
     def load_local_cache(self) -> None:
@@ -378,10 +406,10 @@ class NakedGeminiTUI(App):
         header = self.query_one("#header-bar", Label)
         model_display = self.get_current_model_display_name()
         
-        if self.engine_mode == "API_KEY" and self.genai_client:
-            session_status = "[bold green]🟢 Kesintisiz Bağlı (Official Google Gemini API)[/bold green]"
-        elif self.web_client and getattr(self.web_client, "_cookie_source", "") != "Guest":
-            session_status = f"[bold green]🟢 Hesaba Bağlı ({getattr(self.web_client, '_cookie_source', '')})[/bold green]"
+        if self.is_authenticated_user and self.all_chats_cache:
+            session_status = "[bold green]🟢 Hesaba Bağlı (Google Account Web Chat)[/bold green]"
+        elif self.client and getattr(self.client, "_cookie_source", "") != "Guest":
+            session_status = f"[bold green]🟢 Bağlandı ({getattr(self.client, '_cookie_source', '')})[/bold green]"
         else:
             session_status = "[bold yellow]🟡 Misafir Modu (Giriş Yapılmadı)[/bold yellow]"
 
@@ -401,73 +429,90 @@ class NakedGeminiTUI(App):
     def show_login_instructions(self) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
         login_guide = (
-            "🔑 **Google Gemini Kesintisiz Bağlantı Rehberi**\n\n"
-            "Çerezlerin 30 Ağustos Google web güncellemesiyle sık sık düşmesini önleyen **en kararlı yöntem**:\n\n"
-            "1. Ücretsiz API Key almak için tıklayın: [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)\n"
-            "2. Aldığınız ücretsiz **`AIzaSy...`** API key'inizi aşağıdaki mesaj kutusuna yazıp gönderin:\n"
-            "   `/login AIzaSy...`\n\n"
-            "*(Bir kez girdiğinizde hiç çıkış yapmaz, kopmaz ve %100 otomatik çalışır!)*"
+            "🌐 **Google Gemini Web Oturumu Bağlantı Rehberi**\n\n"
+            "Google web hesabınızla (`gemini.google.com`) sohbet geçmişinizi senkronize etmek için 30 saniyelik adımlar:\n\n"
+            "1. Tarayıcınızda (Chrome/Brave/Firefox) [gemini.google.com](https://gemini.google.com) sekmesini açın.\n"
+            "2. **`F12`** tuşuna basıp **Network (Ağ)** sekmesine geçin, sayfayı yenileyin (`F5`).\n"
+            "3. Listede çıkan `gemini.google.com` isteğindeki **`Cookie:`** satırını tamamen kopyalayın.\n"
+            "4. Aşağıdaki mesaj kutusuna yazıp gönderin:\n"
+            "   `/login kopyaladığınız_metin`\n\n"
+            "*(Sistem kopyaladığınız metindeki `__Secure-1PSID` ve `__Secure-1PSIDTS` çerezlerini ayıklayıp canlı web sohbetlerinize bağlanır!)*"
         )
         chat_log.write(Markdown(login_guide))
         chat_log.write("\n---\n")
         chat_log.scroll_end(animate=False)
 
-    # --- GEMINI CLIENT BAĞLANTISI ---
+    # --- GEMINI CLIENT VE CANLI WEB BAGLANTISI ---
     @work(exclusive=True)
     async def connect_to_gemini(self) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
-        api_key, psid, psidts, psidcc = load_credentials()
-        
-        # 1. YOL: Resmi Google AI Studio API Key varsa anında %100 kesintisiz bağlan
-        if api_key and HAS_GENAI_SDK:
-            try:
-                self.genai_client = genai.Client(api_key=api_key)
-                self.engine_mode = "API_KEY"
-                self.active_genai_chat = self.genai_client.chats.create(model=self.get_current_model_display_name())
-                self.update_header_status()
-                self.update_chat_info_bar()
-                return
-            except Exception as e:
-                self.engine_mode = "WEB"
-
-        # 2. YOL: Web Client Fallback
         try:
+            psid, psidts, psidcc = load_cookie_credentials()
+            
             kwargs = {}
             if psidcc:
                 kwargs["secure_1psidcc"] = psidcc
                 
-            self.web_client = GeminiClient(
+            self.client = GeminiClient(
                 secure_1psid=psid,
                 secure_1psidts=psidts,
                 auto_cookies=True if not psid else False,
                 **kwargs
             )
-            await self.web_client.init(timeout=45, auto_close=False, auto_refresh=True)
-            self.engine_mode = "WEB"
-            self.active_chat = self.web_client.start_chat()
             
+            await self.client.init(timeout=45, auto_close=False, auto_refresh=True)
+            
+            models = self.client.list_models()
+            if models:
+                real_avail = [m for m in models if getattr(m, "is_available", True)]
+                if real_avail:
+                    self.available_models = real_avail
+            
+            self.select_default_model_flash_37()
+            selected_model = self.available_models[self.active_model_idx] if self.available_models else None
+            self.active_chat = self.client.start_chat(model=selected_model)
+            
+            # Doğrulama: Gerçekten sohbetler çekilebiliyor mu?
+            try:
+                await self.client._fetch_recent_chats(recent=100)
+                chats = self.client.list_chats() or []
+                if chats:
+                    self.is_authenticated_user = True
+            except Exception:
+                self.is_authenticated_user = False
+
             self.update_header_status()
             self.update_chat_info_bar()
             
-            cookie_source = getattr(self.web_client, "_cookie_source", "")
-            if cookie_source == "Guest":
+            cookie_source = getattr(self.client, "_cookie_source", "")
+            if cookie_source == "Guest" or not self.is_authenticated_user:
                 self.show_login_instructions()
             else:
                 self.sync_chats_from_server_bg()
-        except Exception:
+        except Exception as e:
             self.update_header_status()
             self.update_chat_info_bar()
-            self.show_login_instructions()
+            chat_log.write(Markdown(f"⚠️ **Bağlantı Kurulamadı:** `{str(e)}`"))
+            chat_log.write("\n")
 
     @work(exclusive=True, group="sync_bg")
     async def sync_chats_from_server_bg(self) -> None:
-        if not self.web_client or self.engine_mode == "API_KEY":
+        if not self.client:
             return
 
         try:
-            await self.web_client._fetch_recent_chats(recent=500)
-            chats = self.web_client.list_chats() or []
+            await self.client._fetch_recent_chats(recent=500)
+            chats = self.client.list_chats() or []
             
+            if not chats:
+                self.is_authenticated_user = False
+                self.update_header_status()
+                await self.render_chat_list([])
+                return
+
+            self.is_authenticated_user = True
+            self.update_header_status()
+
             cache_data = []
             for c in chats:
                 local_pin = False
@@ -489,6 +534,13 @@ class NakedGeminiTUI(App):
                 
             self.all_chats_cache = cache_data
             self.save_local_cache(cache_data)
+
+            if self.active_chat and self.active_chat.cid:
+                for c in cache_data:
+                    if c["cid"] == self.active_chat.cid and c["title"]:
+                        self.active_chat_title = c["title"]
+                        self.update_chat_info_bar()
+                        break
 
             search_val = self.query_one("#search-input", Input).value
             await self.render_chat_list(cache_data, filter_query=search_val)
@@ -512,6 +564,12 @@ class NakedGeminiTUI(App):
 
             sidebar_header = self.query_one("#sidebar-header-chat", Label)
             sidebar_header.update(f"💬 SON KULLANILANLAR ({len(chats)})\n")
+
+            if not self.is_authenticated_user:
+                item = ListItem(Label("> (Misafir Modu)"))
+                item.chat_id = None
+                await chat_list.mount(item)
+                return
 
             if not chats:
                 item = ListItem(Label("> (Geçmiş Sohbet Yok)"))
@@ -584,6 +642,64 @@ class NakedGeminiTUI(App):
         else:
             popup.display = False
 
+    # --- GEÇMİŞ SOHBETİ YÜKLEME ---
+    @work(exclusive=True)
+    async def load_historical_chat(self, chat_id: str, title: str) -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        chat_log.clear()
+        
+        self.active_chat_title = title
+        self.update_chat_info_bar()
+        
+        selected_model = self.available_models[self.active_model_idx] if self.available_models else None
+        
+        if self.client:
+            history = await self.client.read_chat(chat_id, limit=100)
+            rid = ""
+            rcid = ""
+            
+            if history and history.turns:
+                for turn in history.turns:
+                    if turn.role == "model" and turn.model_output:
+                        mo = turn.model_output
+                        if len(mo.metadata) >= 2 and mo.metadata[1]:
+                            rid = mo.metadata[1]
+                        if mo.rcid:
+                            rcid = mo.rcid
+                        break
+                
+                self.active_chat = self.client.start_chat(
+                    cid=chat_id,
+                    rid=rid,
+                    rcid=rcid,
+                    model=selected_model
+                )
+
+                for turn in reversed(history.turns):
+                    if turn.role == "user":
+                        chat_log.write(Markdown(f"**Sen:** {turn.text}"))
+                        chat_log.write("\n")
+                    else:
+                        self.last_gemini_response = turn.text
+                        chat_log.write(Text("Gemini:", style="bold green"))
+                        chat_log.write(Markdown(turn.text))
+                        
+                        if hasattr(turn, "citations") and turn.citations:
+                            sources_md = "\n🔗 **Web Kaynakları:**\n"
+                            for c in turn.citations:
+                                t_str = getattr(c, "title", None) or getattr(c, "url", "Kaynak")
+                                u_str = getattr(c, "url", "#")
+                                sources_md += f"- [{t_str}]({u_str})\n"
+                            chat_log.write(Markdown(sources_md))
+                            
+                        chat_log.write("\n---\n")
+                
+                chat_log.scroll_end(animate=False)
+            else:
+                self.active_chat = self.client.start_chat(cid=chat_id, model=selected_model)
+        else:
+            self.active_chat = self.client.start_chat(cid=chat_id, model=selected_model) if self.client else None
+
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id == "command-suggestions":
             cmd = getattr(event.item, "command_str", None)
@@ -593,7 +709,7 @@ class NakedGeminiTUI(App):
                     msg_input.value = "/file "
                 elif cmd == "/rename <başlık>":
                     msg_input.value = "/rename "
-                elif cmd == "/login [API_KEY veya Çerez]":
+                elif cmd == "/login [Çerez]":
                     msg_input.value = "/login "
                 elif cmd in ["/import <dosya>", "/export <dosya>"]:
                     msg_input.value = cmd.split()[0] + " "
@@ -605,9 +721,22 @@ class NakedGeminiTUI(App):
                 self.query_one("#command-suggestions", ListView).display = False
             return
 
+        if event.list_view.id == "chat-list":
+            chat_id = getattr(event.item, "chat_id", None)
+            if chat_id:
+                title = getattr(event.item, "title_text", "Sohbet")
+                self.load_historical_chat(chat_id, title)
+                self.query_one("#message-input", Input).focus()
+
     # --- SOHBETİ DISA AKTARMA (/export) ---
     def action_export_chat(self, filename: str = "") -> None:
         chat_log = self.query_one("#chat-log", RichLog)
+        if not self.active_chat:
+            chat_log.write(Markdown("⚠️ **Dışa aktarılacak aktif sohbet bulunamadı.**"))
+            chat_log.write("\n")
+            chat_log.scroll_end(animate=False)
+            return
+
         if not filename:
             now_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             clean_title = "".join(c if c.isalnum() else "_" for c in self.active_chat_title)[:25]
@@ -619,13 +748,21 @@ class NakedGeminiTUI(App):
     async def _do_export_file(self, export_path: Path) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
         try:
+            cid = self.active_chat.cid if self.active_chat else ""
+            history = await self.client.read_chat(cid, limit=150) if (self.client and cid) else None
+            
             content = f"# 🤖 GeminiTUI Sohbet Raporu\n"
             content += f"- **Başlık:** {self.active_chat_title}\n"
             content += f"- **Model:** {self.get_current_model_display_name()}\n"
-            content += f"- **Tarih:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            content += f"- **Tarih:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            content += f"- **Sohbet ID:** `{cid}`\n\n"
             content += "---\n\n"
             
-            if self.last_gemini_response:
+            if history and history.turns:
+                for turn in reversed(history.turns):
+                    role_name = "👤 Sen" if turn.role == "user" else "🤖 Gemini"
+                    content += f"### {role_name}\n\n{turn.text}\n\n---\n\n"
+            elif self.last_gemini_response:
                 content += f"### 👤 Sen\n\n{self.last_user_prompt}\n\n---\n\n"
                 content += f"### 🤖 Gemini\n\n{self.last_gemini_response}\n\n---\n\n"
                 
@@ -639,13 +776,174 @@ class NakedGeminiTUI(App):
             chat_log.write("\n")
         chat_log.scroll_end(animate=False)
 
+    # --- SOHBET DOSYASI İÇE AKTARMA VE CANLI BAĞLAM RESTORE ETME (/import) ---
+    def action_import_chat(self, filepath_str: str) -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        if not filepath_str:
+            chat_log.write(Markdown("⚠️ **Lütfen bir dosya yolu belirtin:** `/import sohbet_dosyasi.md`"))
+            chat_log.write("\n")
+            chat_log.scroll_end(animate=False)
+            return
+
+        import_path = Path(filepath_str.strip("'\"")).expanduser()
+        if not import_path.exists():
+            chat_log.write(Markdown(f"⚠️ **Dosya bulunamadı:** `{filepath_str}`"))
+            chat_log.write("\n")
+            chat_log.scroll_end(animate=False)
+            return
+
+        asyncio.create_task(self._do_import_file(import_path))
+
+    async def _do_import_file(self, import_path: Path) -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        try:
+            with open(import_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            sections = re.split(r'### (👤 Sen|🤖 Gemini)\n\n', content)
+            imported_turns = []
+            for i in range(1, len(sections), 2):
+                role_raw = sections[i]
+                text = sections[i+1].split('\n\n---\n\n')[0].strip()
+                role = "user" if "Sen" in role_raw else "model"
+                imported_turns.append((role, text))
+
+            if not imported_turns:
+                user_blocks = re.findall(r"(?:### 👤 Sen|User:)\s*\n+(.*?)(?=\n+###|\n+🤖|\n+Gemini:|$)", content, re.DOTALL)
+                gemini_blocks = re.findall(r"(?:### 🤖 Gemini|Gemini:)\s*\n+(.*?)(?=\n+###|\n+👤|\n+User:|$)", content, re.DOTALL)
+                for u, g in zip(user_blocks, gemini_blocks):
+                    imported_turns.append(("user", u.strip()))
+                    imported_turns.append(("model", g.strip()))
+
+            if not imported_turns:
+                chat_log.write(Markdown("⚠️ **Dosya içerisinde geçerli sohbet turu bulunamadı.**"))
+                chat_log.write("\n")
+                chat_log.scroll_end(animate=False)
+                return
+
+            selected_model = self.available_models[self.active_model_idx] if self.available_models else None
+            self.active_chat = self.client.start_chat(model=selected_model) if self.client else None
+            self.active_chat_title = f"İçeri Aktarıldı: {import_path.stem}"
+            self.update_chat_info_bar()
+
+            chat_log.clear()
+            chat_log.write(Markdown(f"📥 **Sohbet geçmişi içeri aktarıldı:** `{import_path.name}` ({len(imported_turns)} mesaj)"))
+            chat_log.write("\n---\n")
+
+            history_summary = []
+            for role, text in imported_turns:
+                if role == "user":
+                    chat_log.write(Markdown(f"**Sen:** {text}"))
+                    chat_log.write("\n")
+                    history_summary.append(f"User: {text}")
+                else:
+                    self.last_gemini_response = text
+                    chat_log.write(Text("Gemini:", style="bold green"))
+                    chat_log.write(Markdown(text))
+                    chat_log.write("\n---\n")
+                    history_summary.append(f"Gemini: {text}")
+
+            chat_log.scroll_end(animate=False)
+
+            if self.active_chat:
+                context_prompt = (
+                    "[ÖNEMLİ SİSTEM TALİMATI: Aşağıdaki metin geçmiş sohbet kaydımızdır. "
+                    "Lütfen bu geçmişi aktif sohbet oturumunun resmi bağlamı olarak kabul et ve sonraki mesajlarıma bu bağlamı sürdürerek yanıt ver]:\n\n"
+                    + "\n\n".join(history_summary[-10:])
+                )
+                asyncio.create_task(self.active_chat.send_message(context_prompt))
+
+        except Exception as e:
+            chat_log.write(Markdown(f"⚠️ **İçeri aktarma hatası:** `{str(e)}`"))
+            chat_log.write("\n")
+            chat_log.scroll_end(animate=False)
+
+    # --- PANOYA KOPYALAMA (Alt+C / /copy) ---
+    def action_copy_last_response(self) -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
+        if not self.last_gemini_response:
+            chat_log.write(Markdown("⚠️ **Kopyalanacak yanıt bulunamadı.**"))
+            chat_log.write("\n")
+            chat_log.scroll_end(animate=False)
+            return
+            
+        success = False
+        text_to_copy = self.last_gemini_response
+        
+        if shutil.which("wl-copy"):
+            try:
+                p = subprocess.Popen(["wl-copy"], stdin=subprocess.PIPE)
+                p.communicate(input=text_to_copy.encode("utf-8"))
+                success = True
+            except Exception:
+                pass
+        elif shutil.which("xclip"):
+            try:
+                p = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
+                p.communicate(input=text_to_copy.encode("utf-8"))
+                success = True
+            except Exception:
+                pass
+
+        if success:
+            chat_log.write(Markdown("📋 **En son yanıt panoya kopyalandı!**"))
+            chat_log.write("\n")
+        else:
+            chat_log.write(Markdown("⚠️ **Panoya kopyalama başarısız (wl-copy / xclip bulunamadı).**"))
+            chat_log.write("\n")
+        chat_log.scroll_end(animate=False)
+
+    # --- SOHBETİ YENİDEN ADLANDIRMA VE SABİTLEME ---
+    def action_pin_chat(self) -> None:
+        if not self.active_chat or not self.active_chat.cid:
+            return
+        
+        cid = self.active_chat.cid
+        chat_log = self.query_one("#chat-log", RichLog)
+        
+        for c in self.all_chats_cache:
+            if c.get("cid") == cid:
+                c["is_pinned"] = not c.get("is_pinned", False)
+                state_str = "iğnelendi (📌)" if c["is_pinned"] else "iğnesi kaldırıldı"
+                chat_log.write(Markdown(f"📌 **Sohbet {state_str}.**"))
+                chat_log.write("\n")
+                break
+                
+        self.save_local_cache(self.all_chats_cache)
+        search_val = self.query_one("#search-input", Input).value
+        asyncio.create_task(self.render_chat_list(self.all_chats_cache, filter_query=search_val))
+        chat_log.scroll_end(animate=False)
+
+    def action_rename_chat(self, new_title: str) -> None:
+        if not self.active_chat or not self.active_chat.cid or not new_title:
+            return
+            
+        cid = self.active_chat.cid
+        self.active_chat_title = new_title
+        self.update_chat_info_bar()
+        
+        for c in self.all_chats_cache:
+            if c.get("cid") == cid:
+                c["title"] = new_title
+                c["title_renamed"] = True
+                break
+                
+        self.save_local_cache(self.all_chats_cache)
+        search_val = self.query_one("#search-input", Input).value
+        asyncio.create_task(self.render_chat_list(self.all_chats_cache, filter_query=search_val))
+        
+        chat_log = self.query_one("#chat-log", RichLog)
+        chat_log.write(Markdown(f"✏️ **Sohbet yeniden adlandırıldı:** `{new_title}`"))
+        chat_log.write("\n")
+        chat_log.scroll_end(animate=False)
+
     # --- AKSİYON KISAYOLLARI ---
     def action_new_chat(self) -> None:
-        if self.engine_mode == "API_KEY" and self.genai_client:
-            self.active_genai_chat = self.genai_client.chats.create(model=self.get_current_model_display_name())
-        elif self.web_client:
-            self.active_chat = self.web_client.start_chat()
-            
+        if not self.client:
+            return
+        selected_model = self.available_models[self.active_model_idx] if self.available_models else None
+        self.active_chat = self.client.start_chat(model=selected_model)
+        
         self.active_chat_title = "Yeni Sohbet"
         self.update_chat_info_bar()
         
@@ -658,16 +956,14 @@ class NakedGeminiTUI(App):
         self.active_model_idx = (self.active_model_idx + 1) % len(self.available_models)
         new_model = self.available_models[self.active_model_idx]
         
-        if self.engine_mode == "API_KEY" and self.genai_client:
-            self.active_genai_chat = self.genai_client.chats.create(model=new_model)
-        elif self.active_chat:
+        if self.active_chat:
             self.active_chat.model = new_model
             
         self.update_header_status()
         self.update_chat_info_bar()
         
         chat_log = self.query_one("#chat-log", RichLog)
-        chat_log.write(Markdown(f"⚡ **Aktif AI Modeli Değiştirildi:** `{new_model}`"))
+        chat_log.write(Markdown(f"⚡ **Aktif AI Modeli Değiştirildi:** `{self.get_current_model_display_name()}`"))
         chat_log.write("\n")
         chat_log.scroll_end(animate=False)
 
@@ -676,18 +972,36 @@ class NakedGeminiTUI(App):
         msg_input.value = "/file "
         msg_input.focus()
 
+    @work(exclusive=True)
+    async def action_delete_chat(self) -> None:
+        if not self.client or not self.active_chat or not self.active_chat.cid:
+            return
+            
+        cid = self.active_chat.cid
+        try:
+            self.client.delete_chat(cid)
+            self.action_new_chat()
+            self.sync_chats_from_server_bg()
+        except Exception:
+            pass
+
     def action_show_help(self) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
         help_md = (
             "### 💡 KULLANIM VE KOMUT YARDIMI\n\n"
             "- **F1** veya **Alt+N** veya `/new` : Yeni sohbet başlatır.\n"
             "- **F2** veya **Alt+M** veya `/model` : AI Modelleri arasında geçiş yapar.\n"
-            "- **F3** veya **Alt+F** veya `/file <yol>` : Görsel veya metin dosyası ekler.\n"
-            "- `/login [API_KEY veya Çerez]` : Kesintisiz bağlantı anahtarını tanımlar.\n"
+            "- **F3** veya **Alt+F** veya `/file <yol>` : Görsel (PNG/JPG/WEBP), PDF veya metin dosyası ekler.\n"
+            "- `/login` : Oturum açma rehberini gösterir.\n"
             "- `/export <dosya>` : Aktif sohbeti Markdown (.md) dosyası olarak kaydeder.\n"
+            "- `/import <dosya>` : Kaydedilmiş sohbet dosyasını yükler ve canlı oturum bağlamına aktarır.\n"
+            "- **F4** veya **Alt+D** veya `/delete` : Aktif sohbeti hesabınızdan siler.\n"
             "- **Alt+C** veya `/copy` : En son verilen yanıtı panoya kopyalar.\n"
             "- **Alt+V** veya `/view` : Üretilen görseli mpv ile tam çözünürlükte açar.\n"
             "- **F7** veya **Alt+H** veya `/help` : Yardım menüsünü gösterir.\n"
+            "- `/pin` : Sohbeti iğneler/iğneyi kaldırır (📌).\n"
+            "- `/rename <başlık>` : Sohbetin adını değiştirir.\n"
+            "- `/clear` : Eklenmiş dosyaları temizler.\n"
             "- `/exit` : Uygulamadan çıkar.\n\n"
             "---\n"
         )
@@ -706,30 +1020,28 @@ class NakedGeminiTUI(App):
         self.query_one("#message-input", Input).value = ""
         self.query_one("#command-suggestions", ListView).display = False
 
-        if text.startswith("/login"):
-            raw_input = text.split(" ", 1)[1].strip() if " " in text else ""
+        if text == "/login":
+            self.show_login_instructions()
+            return
+
+        if text.startswith("/login "):
+            raw_input = text.split(" ", 1)[1].strip()
             chat_log = self.query_one("#chat-log", RichLog)
             
-            if not raw_input:
-                self.show_login_instructions()
-                return
-
-            if raw_input.startswith("AIzaSy") or len(raw_input) > 30 and not "=" in raw_input:
-                save_credentials(api_key=raw_input)
-                chat_log.write(Markdown("🔑 **Google AI Studio API Key kaydedildi! Kesintisiz bağlanılıyor...**"))
+            psid, psidts, psidcc = parse_cookie_input(raw_input)
+            if psid:
+                save_cookie_credentials(psid, psidts, psidcc)
+                chat_log.write(Markdown("🔑 **Çerezler otomatik ayıklandı ve kaydedildi! Hesaba yeniden bağlanılıyor...**"))
                 chat_log.write("\n")
                 chat_log.scroll_end(animate=False)
                 self.connect_to_gemini()
             else:
-                psid_m = re.search(r'__Secure-1PSID=([^;\s]+)', raw_input)
-                psidts_m = re.search(r'__Secure-1PSIDTS=([^;\s]+)', raw_input)
-                psid = psid_m.group(1) if psid_m else raw_input.split()[0]
-                psidts = psidts_m.group(1) if psidts_m else (raw_input.split()[1] if len(raw_input.split()) > 1 else None)
-                save_credentials(psid=psid, psidts=psidts)
-                chat_log.write(Markdown("🔑 **Çerezler kaydedildi! Hesaba yeniden bağlanılıyor...**"))
-                chat_log.write("\n")
-                chat_log.scroll_end(animate=False)
-                self.connect_to_gemini()
+                self.show_login_instructions()
+            return
+
+        if text.startswith("/import "):
+            fpath = text.split(" ", 1)[1].strip()
+            self.action_import_chat(fpath)
             return
 
         if text.startswith("/export") or text.startswith("/save"):
@@ -765,21 +1077,47 @@ class NakedGeminiTUI(App):
             self.action_copy_last_response()
             return
 
+        if text == "/pin":
+            self.action_pin_chat()
+            return
+
+        if text.startswith("/rename "):
+            new_t = text.split(" ", 1)[1].strip()
+            self.action_rename_chat(new_t)
+            return
+
+        if text == "/clear":
+            self.attached_files.clear()
+            self.update_attachments_bar()
+            chat_log = self.query_one("#chat-log", RichLog)
+            chat_log.write(Markdown("📎 **Ekli dosyalar temizlendi.**"))
+            chat_log.write("\n")
+            chat_log.scroll_end(animate=False)
+            return
+
         if text == "/new":
             self.action_new_chat()
             return
 
         if text in ["/model", "/models"]:
-            self.action_cycle_model()
+            if self.available_models:
+                self.action_cycle_model()
             return
 
         if text.startswith("/model "):
             val = text.split(" ", 1)[1].strip()
-            for idx, m in enumerate(self.available_models):
-                if val.lower() in m.lower():
-                    self.active_model_idx = idx
-                    self.action_new_chat()
-                    return
+            if val.isdigit() and 1 <= int(val) <= len(self.available_models):
+                self.active_model_idx = int(val) - 1
+                new_m = self.available_models[self.active_model_idx]
+                if self.active_chat:
+                    self.active_chat.model = new_m
+                self.update_header_status()
+                self.update_chat_info_bar()
+                return
+
+        if text == "/delete":
+            self.action_delete_chat()
+            return
 
         if text in ["/help", "/yardim"]:
             self.action_show_help()
@@ -787,6 +1125,9 @@ class NakedGeminiTUI(App):
 
         if text in ["/exit", "/quit"]:
             self.exit()
+            return
+
+        if not self.active_chat:
             return
 
         # Normal Mesaj Gönderimi
@@ -808,7 +1149,7 @@ class NakedGeminiTUI(App):
 
         self.send_message_to_gemini(text, files=files_to_send)
 
-    # ⚡ ÇİFT MOTORLU MESAJLAŞMA (API_KEY or WEB)
+    # ⚡ TEMİZ AKICI MESAJLAŞMA MOTORU
     @work(exclusive=True)
     async def send_message_to_gemini(self, message: str, files: Optional[List[str]] = None) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
@@ -816,89 +1157,63 @@ class NakedGeminiTUI(App):
         try:
             response_text = ""
             base_lines = len(chat_log.lines)
+            last_chunk_obj = None
             
-            # YOL A: Official Google GenAI SDK (API_KEY Engine)
-            if self.engine_mode == "API_KEY" and self.genai_client:
-                if not self.active_genai_chat:
-                    self.active_genai_chat = self.genai_client.chats.create(model=self.get_current_model_display_name())
-                
-                # Check for files
-                prompt_content = [message]
-                if files:
-                    for fpath in files:
-                        p = Path(fpath)
-                        if p.exists():
-                            try:
-                                uploaded = await asyncio.to_thread(self.genai_client.files.upload, file=p)
-                                prompt_content.append(uploaded)
-                            except Exception:
-                                pass
-
-                response_stream = await asyncio.to_thread(
-                    self.active_genai_chat.send_message_stream,
-                    prompt_content
-                )
-                
-                for chunk in response_stream:
-                    if chunk and chunk.text:
-                        response_text += chunk.text
+            async for chunk in self.active_chat.send_message_stream(
+                prompt=message,
+                files=files
+            ):
+                if chunk:
+                    last_chunk_obj = chunk
+                    if chunk.text_delta:
+                        response_text += chunk.text_delta
                         chat_log.lines = chat_log.lines[:base_lines]
                         chat_log.write(Text("Gemini:", style="bold green"))
                         chat_log.write(response_text)
                         chat_log.scroll_end(animate=False)
 
-                if response_text.strip():
-                    self.last_gemini_response = response_text
-                    chat_log.lines = chat_log.lines[:base_lines]
-                    chat_log.write(Text("Gemini:", style="bold green"))
-                    chat_log.write(Markdown(response_text))
-                    chat_log.write("\n---\n")
-                    chat_log.scroll_end(animate=False)
-                return
+            if response_text.strip():
+                self.last_gemini_response = response_text
+                chat_log.lines = chat_log.lines[:base_lines]
+                chat_log.write(Text("Gemini:", style="bold green"))
+                chat_log.write(Markdown(response_text))
+                
+                if last_chunk_obj and hasattr(last_chunk_obj, "citations") and last_chunk_obj.citations:
+                    sources_md = "\n🔗 **Web Kaynakları:**\n"
+                    for c in last_chunk_obj.citations:
+                        t_str = getattr(c, "title", None) or getattr(c, "url", "Kaynak")
+                        u_str = getattr(c, "url", "#")
+                        sources_md += f"- [{t_str}]({u_str})\n"
+                    chat_log.write(Markdown(sources_md))
 
-            # YOL B: Web Engine (GeminiClient)
-            if self.web_client and self.active_chat:
-                last_chunk_obj = None
-                async for chunk in self.active_chat.send_message_stream(prompt=message, files=files):
-                    if chunk:
-                        last_chunk_obj = chunk
-                        if chunk.text_delta:
-                            response_text += chunk.text_delta
-                            chat_log.lines = chat_log.lines[:base_lines]
-                            chat_log.write(Text("Gemini:", style="bold green"))
-                            chat_log.write(response_text)
-                            chat_log.scroll_end(animate=False)
+                if last_chunk_obj and hasattr(last_chunk_obj, "images") and last_chunk_obj.images:
+                    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+                    for img in last_chunk_obj.images:
+                        try:
+                            saved_file = await img.save(path=str(IMAGES_DIR))
+                            self.last_generated_image_path = saved_file
+                            
+                            chat_log.write(Markdown(f"🖼️ **Görsel Üretildi:** `{saved_file}`  *(🔍 Tam çözünürlük: **Alt+V** / `/view`)*"))
+                            
+                            ansi_img_text = self.render_image_in_chat(saved_file, max_width=85)
+                            if ansi_img_text:
+                                chat_log.write(ansi_img_text)
+                        except Exception:
+                            pass
 
-                if response_text.strip():
-                    self.last_gemini_response = response_text
-                    chat_log.lines = chat_log.lines[:base_lines]
-                    chat_log.write(Text("Gemini:", style="bold green"))
-                    chat_log.write(Markdown(response_text))
-                    
-                    if last_chunk_obj and hasattr(last_chunk_obj, "citations") and last_chunk_obj.citations:
-                        sources_md = "\n🔗 **Web Kaynakları:**\n"
-                        for c in last_chunk_obj.citations:
-                            t_str = getattr(c, "title", None) or getattr(c, "url", "Kaynak")
-                            u_str = getattr(c, "url", "#")
-                            sources_md += f"- [{t_str}]({u_str})\n"
-                        chat_log.write(Markdown(sources_md))
+                chat_log.write("\n---\n")
+                chat_log.scroll_end(animate=False)
 
-                    if last_chunk_obj and hasattr(last_chunk_obj, "images") and last_chunk_obj.images:
-                        IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-                        for img in last_chunk_obj.images:
-                            try:
-                                saved_file = await img.save(path=str(IMAGES_DIR))
-                                self.last_generated_image_path = saved_file
-                                chat_log.write(Markdown(f"🖼️ **Görsel Üretildi:** `{saved_file}`  *(🔍 Tam çözünürlük: **Alt+V** / `/view`)*"))
-                                ansi_img_text = self.render_image_in_chat(saved_file, max_width=85)
-                                if ansi_img_text:
-                                    chat_log.write(ansi_img_text)
-                            except Exception:
-                                pass
-
-                    chat_log.write("\n---\n")
-                    chat_log.scroll_end(animate=False)
-
+            is_new_chat = True
+            if self.active_chat and self.active_chat.cid:
+                for c in self.all_chats_cache:
+                    if c.get("cid") == self.active_chat.cid:
+                        is_new_chat = False
+                        break
+                        
+            if is_new_chat:
+                self.sync_chats_from_server_bg()
+            
         except Exception as e:
             chat_log.write(Markdown(f"**[Hata]:** `{str(e)}`"))
             chat_log.write("\n")
