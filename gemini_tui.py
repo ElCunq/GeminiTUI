@@ -45,12 +45,11 @@ IMAGES_DIR = CACHE_DIR / "images"
 CONFIG_DIR = Path.home() / ".config" / "gemini_tui"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
-# Temiz, Saf Chatbot Komut Listesi
 COMMANDS_LIST = [
     ("/help", "Kullanım yardımını ve komut listesini gösterir"),
     ("/new", "Yeni temiz bir sohbet başlatır"),
     ("/model", "AI modelleri arasında geçiş yapar (3.7 Flash, 3.1 Pro, 3.5 Flash-Lite)"),
-    ("/login", "Tarayıcıyı otomatik açıp Google hesabınıza 0-tık ile bağlanır"),
+    ("/login", "Oturum açma rehberi ve çerez/API key giriş menüsü"),
     ("/export <dosya>", "Aktif sohbeti Markdown (.md) dosyası olarak kaydeder"),
     ("/import <dosya>", "Kaydedilmiş sohbet dosyasını yükler ve bağlamı canlı oturuma aktarır"),
     ("/file <yol>", "Görsel (PNG/JPG/WEBP), PDF veya kod/metin dosyası ekler (F3/Alt+F)"),
@@ -101,7 +100,7 @@ def save_cookie_credentials(psid: str, psidts: Optional[str] = None, psidcc: Opt
 
 def parse_cookie_input(raw_text: str):
     """
-    Kullanıcının yapıştırdığı karmaşık veya ham Cookie metninden
+    Kullanıcının yapıştırdığı ham Cookie metninden
     __Secure-1PSID, __Secure-1PSIDTS ve __Secure-1PSIDCC değerlerini otomatik ayıklar.
     """
     psid_m = re.search(r'__Secure-1PSID=([^;\s]+)', raw_text)
@@ -160,7 +159,7 @@ class NakedGeminiTUI(App):
         layout: horizontal; 
     }
     #sidebar { 
-        width: 32; 
+        width: 34; 
         height: 100%; 
         border-right: solid #555555; 
         padding: 0 1; 
@@ -251,6 +250,7 @@ class NakedGeminiTUI(App):
         
         self.attached_files: List[str] = []
         self.all_chats_cache: List[Dict[str, Any]] = []
+        self.is_authenticated_user: bool = False
         
         self.last_user_prompt: str = ""
         self.last_gemini_response: str = ""
@@ -265,8 +265,8 @@ class NakedGeminiTUI(App):
         with Horizontal(id="body-container"):
             with Vertical(id="sidebar"):
                 yield Label("✨ + Yeni Sohbet (F1)", id="new-chat-btn")
-                yield Label("💬 GEÇMİŞ SOHBETLER\n", id="sidebar-header-chat")
-                yield Input(placeholder="🔍 Sohbet ara...", id="search-input")
+                yield Label("💬 SON KULLANILANLAR\n", id="sidebar-header-chat")
+                yield Input(placeholder="🔍 Sohbetlerde arama yapın...", id="search-input")
                 yield ListView(id="chat-list")
             
             with Vertical(id="main-area"):
@@ -274,7 +274,7 @@ class NakedGeminiTUI(App):
                 yield ListView(id="command-suggestions")
                 yield Label("💬 Sohbet: Yeni Sohbet  │  ⚡ Model: 3.7 Flash", id="chat-info-bar")
                 yield Label("", id="attachments-bar")
-                yield Input(placeholder="Mesajınız veya komut (/)...", id="message-input")
+                yield Input(placeholder="Gemini'a sorun veya komut yazın (/)...", id="message-input")
                 
         yield Label("F1: Yeni │ F2: Model │ F3: Dosya │ F4: Sil │ Alt+C: Kopyala │ Alt+V: Görseli Aç │ F7: Yardım", id="footer-bar")
 
@@ -404,15 +404,12 @@ class NakedGeminiTUI(App):
         header = self.query_one("#header-bar", Label)
         model_display = self.get_current_model_display_name()
         
-        session_status = "[bold green]🟢 Hesaba Bağlı[/bold green]"
-        if self.client:
-            cookie_source = getattr(self.client, "_cookie_source", "")
-            if cookie_source == "Guest":
-                session_status = "[bold yellow]🟡 Misafir Modu[/bold yellow]"
-            elif cookie_source:
-                session_status = f"[bold green]🟢 Hesaba Bağlı ({cookie_source})[/bold green]"
+        if self.is_authenticated_user and self.all_chats_cache:
+            session_status = "[bold green]🟢 Hesaba Bağlı (Google Account)[/bold green]"
+        elif self.client and getattr(self.client, "_cookie_source", "") != "Guest":
+            session_status = f"[bold green]🟢 Bağlandı ({getattr(self.client, '_cookie_source', '')})[/bold green]"
         else:
-            session_status = "[bold red]🔴 Bağlanıyor...[/bold red]"
+            session_status = "[bold yellow]🟡 Misafir Modu (Giriş Yapılmadı)[/bold yellow]"
 
         status_text = f"⚡ [bold cyan]MODEL:[/bold cyan] [bold white underline]{model_display}[/bold white underline]  │  Oturum: {session_status}"
         header.update(status_text)
@@ -427,75 +424,21 @@ class NakedGeminiTUI(App):
             bar.update("")
             bar.display = False
 
-    # 🚀 OTOMATİK TARAYICI AÇIP 0-TIK ÇEREZ ALGILAYAN OTURUM SİSTEMİ
-    def trigger_auto_browser_login(self) -> None:
+    # 🔑 KUSURSUZ OTURUM VE ÇEREZ REHBERİ
+    def show_login_instructions(self) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
-        chat_log.write(Markdown(
-            "🌐 **Varsayılan tarayıcınızda [gemini.google.com](https://gemini.google.com) adresi açılıyor...**\n\n"
-            "⏳ *Lütfen açılan tarayıcı penceresinde Google hesabınızın açık olduğundan emin olun. Oturumunuz arka planda otomatik olarak taranıyor (30 saniye)...*"
-        ))
-        chat_log.write("\n")
-        chat_log.scroll_end(animate=False)
-
-        try:
-            webbrowser.open("https://gemini.google.com")
-        except Exception:
-            pass
-
-        self._poll_auto_login()
-
-    @work(exclusive=True, group="login_poll")
-    async def _poll_auto_login(self) -> None:
-        chat_log = self.query_one("#chat-log", RichLog)
-        
-        for attempt in range(1, 16):
-            await asyncio.sleep(2)
-            try:
-                test_client = GeminiClient(auto_cookies=True)
-                await test_client.init(timeout=8, auto_close=False, auto_refresh=True)
-                cookie_src = getattr(test_client, "_cookie_source", "Guest")
-                
-                if cookie_src != "Guest":
-                    self.client = test_client
-                    models = self.client.list_models()
-                    if models:
-                        real_avail = [m for m in models if getattr(m, "is_available", True)]
-                        if real_avail:
-                            self.available_models = real_avail
-                    
-                    self.select_default_model_flash_37()
-                    selected_model = self.available_models[self.active_model_idx] if self.available_models else None
-                    self.active_chat = self.client.start_chat(model=selected_model)
-                    
-                    # Bulunan tarayıcı çerezlerini kalıcı kaydedelim
-                    try:
-                        cookies_dict = getattr(self.client, "_cookies", {}) or {}
-                        psid = cookies_dict.get("__Secure-1PSID") or cookies_dict.get("1PSID")
-                        psidts = cookies_dict.get("__Secure-1PSIDTS") or cookies_dict.get("1PSIDTS")
-                        psidcc = cookies_dict.get("__Secure-1PSIDCC") or cookies_dict.get("1PSIDCC")
-                        if psid:
-                            save_cookie_credentials(psid, psidts, psidcc)
-                    except Exception:
-                        pass
-
-                    self.update_header_status()
-                    self.update_chat_info_bar()
-                    
-                    chat_log.write(Markdown(f"🎉 **Tebrikler!** Google hesabınız `{cookie_src}` üzerinden **otomatik olarak algılandı ve bağlandı!**"))
-                    chat_log.write("\n---\n")
-                    chat_log.scroll_end(animate=False)
-                    
-                    self.sync_chats_from_server_bg()
-                    return
-            except Exception:
-                pass
-
-        chat_log.write(Markdown(
-            "⚠️ **Oturum otomatik algılanamadı.**\n\n"
-            "Dilerseniz tarayıcıdan kopyaladığınız metni doğrudan yapıştırabilirsiniz:\n"
-            "`/login kopyalanan_metin`"
-        ))
-        chat_log.write("\n")
+        login_guide = (
+            "🟡 **Google Hesabınıza Bağlanma Rehberi**\n\n"
+            "Google hesabınızdaki sohbet geçmişinize erişmek ve kısıtlamasız bağlanmak için **30 saniyelik kolay yöntem**:\n\n"
+            "1. Tarayıcınızda (Chrome/Brave/Firefox) [gemini.google.com](https://gemini.google.com) sekmesini açın.\n"
+            "2. Klavyeden **`F12`** tuşuna basıp **Network (Ağ)** sekmesine geçin, bir sayfayı yenileyin (`F5`).\n"
+            "3. Listede çıkan `gemini.google.com` isteğine tıklayıp **Request Headers / İstek Başlıkları** altındaki **`Cookie:`** satırını tamamen kopyalayın.\n"
+            "4. Aşağıdaki mesaj kutusuna doğrudan yapıştırıp gönderin:\n"
+            "   `/login kopyaladığınız_metin`\n\n"
+            "*(Sistem kopyaladığınız metnin içindeki `__Secure-1PSID` ve `__Secure-1PSIDTS` çerezlerini otomatik ayıklayıp anında giriş yapacaktır!)*"
+        )
+        chat_log.write(Markdown(login_guide))
+        chat_log.write("\n---\n")
         chat_log.scroll_end(animate=False)
 
     # --- GEMINI CLIENT VE ARKA PLAN BAĞLANTISI ---
@@ -528,12 +471,21 @@ class NakedGeminiTUI(App):
             selected_model = self.available_models[self.active_model_idx] if self.available_models else None
             self.active_chat = self.client.start_chat(model=selected_model)
             
+            # Doğrulama: Gerçekten sohbetler çekilebiliyor mu?
+            try:
+                await self.client._fetch_recent_chats(recent=100)
+                chats = self.client.list_chats() or []
+                if chats:
+                    self.is_authenticated_user = True
+            except Exception:
+                self.is_authenticated_user = False
+
             self.update_header_status()
             self.update_chat_info_bar()
             
             cookie_source = getattr(self.client, "_cookie_source", "")
-            if cookie_source == "Guest":
-                self.trigger_auto_browser_login()
+            if cookie_source == "Guest" or not self.is_authenticated_user:
+                self.show_login_instructions()
             else:
                 self.sync_chats_from_server_bg()
         except Exception as e:
@@ -546,18 +498,20 @@ class NakedGeminiTUI(App):
     async def sync_chats_from_server_bg(self) -> None:
         if not self.client:
             return
-        
-        cookie_source = getattr(self.client, "_cookie_source", "")
-        if cookie_source == "Guest":
-            self.all_chats_cache = []
-            self.save_local_cache([])
-            await self.render_chat_list([])
-            return
 
         try:
             await self.client._fetch_recent_chats(recent=500)
             chats = self.client.list_chats() or []
             
+            if not chats:
+                self.is_authenticated_user = False
+                self.update_header_status()
+                await self.render_chat_list([])
+                return
+
+            self.is_authenticated_user = True
+            self.update_header_status()
+
             cache_data = []
             for c in chats:
                 local_pin = False
@@ -608,10 +562,9 @@ class NakedGeminiTUI(App):
             await chat_list.clear()
 
             sidebar_header = self.query_one("#sidebar-header-chat", Label)
-            sidebar_header.update(f"💬 GEÇMİŞ SOHBETLER ({len(chats)})\n")
+            sidebar_header.update(f"💬 SON KULLANILANLAR ({len(chats)})\n")
 
-            cookie_source = getattr(self.client, "_cookie_source", "") if self.client else ""
-            if cookie_source == "Guest":
+            if not self.is_authenticated_user:
                 item = ListItem(Label("> (Misafir Modu)"))
                 item.chat_id = None
                 await chat_list.mount(item)
@@ -756,7 +709,7 @@ class NakedGeminiTUI(App):
                 elif cmd == "/rename <başlık>":
                     msg_input.value = "/rename "
                 elif cmd == "/login":
-                    msg_input.value = "/login"
+                    msg_input.value = "/login "
                 elif cmd in ["/import <dosya>", "/export <dosya>"]:
                     msg_input.value = cmd.split()[0] + " "
                 elif cmd == "/view":
@@ -1038,7 +991,7 @@ class NakedGeminiTUI(App):
             "- **F1** veya **Alt+N** veya `/new` : Yeni sohbet başlatır.\n"
             "- **F2** veya **Alt+M** veya `/model` : AI Modelleri arasında geçiş yapar.\n"
             "- **F3** veya **Alt+F** veya `/file <yol>` : Görsel (PNG/JPG/WEBP), PDF veya metin dosyası ekler.\n"
-            "- `/login` : Varsayılan tarayıcıyı açıp Google hesabınıza 0-tık ile otomatik bağlanır.\n"
+            "- `/login` : Oturum açma rehberini gösterir.\n"
             "- `/export <dosya>` : Aktif sohbeti Markdown (.md) dosyası olarak kaydeder.\n"
             "- `/import <dosya>` : Kaydedilmiş sohbet dosyasını yükler ve canlı oturum bağlamına aktarır.\n"
             "- **F4** veya **Alt+D** veya `/delete` : Aktif sohbeti hesabınızdan siler.\n"
@@ -1067,7 +1020,7 @@ class NakedGeminiTUI(App):
         self.query_one("#command-suggestions", ListView).display = False
 
         if text == "/login":
-            self.trigger_auto_browser_login()
+            self.show_login_instructions()
             return
 
         if text.startswith("/login "):
@@ -1082,7 +1035,7 @@ class NakedGeminiTUI(App):
                 chat_log.scroll_end(animate=False)
                 self.connect_to_gemini()
             else:
-                self.trigger_auto_browser_login()
+                self.show_login_instructions()
             return
 
         if text.startswith("/import "):
