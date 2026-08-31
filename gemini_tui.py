@@ -225,6 +225,9 @@ def parse_cookie_input(raw_text: str):
 
 # --- ÇOK SATIRLI ÇOKLU GİRDİ VE BELİRGİN İMLEÇ (TEXTAREA) ---
 class PromptTextArea(TextArea):
+    def on_mount(self) -> None:
+        self.cursor_blink = True
+
     def _on_key(self, event: Key) -> None:
         if event.key == "enter" and not event.shift:
             event.prevent_default()
@@ -338,6 +341,7 @@ class NakedGeminiTUI(App):
     #main-area { 
         width: 1fr; 
         height: 100%; 
+        layout: vertical;
         padding: 0 1; 
     }
     #chat-log { 
@@ -401,7 +405,6 @@ class NakedGeminiTUI(App):
 
     /* ALT GİRDİ ÇUBUĞU (INPUT BAR) */
     #input-container {
-        dock: bottom;
         height: 3;
         layout: horizontal;
         border-top: solid #00ffcc;
@@ -424,6 +427,11 @@ class NakedGeminiTUI(App):
     PromptTextArea {
         background: #111111;
         color: #ffffff;
+    }
+    PromptTextArea .text-area--cursor {
+        background: #00ffcc;
+        color: #000000;
+        text-style: bold;
     }
     #prompt-text-area:focus {
         border: solid #00ffcc;
@@ -534,8 +542,8 @@ class NakedGeminiTUI(App):
                     yield Button("[Flash ▾]", id="model-select-btn")
                     yield Button("[🎙️]", id="voice-btn")
                     yield Button("[ Gönder ⏎ ]", id="send-stop-btn")
-                
-        yield Label("💡 İpucu: Fareyle metin kopyalamak için: Shift + Sol Tık Sürükle │ F1: Yeni │ F2: Model │ F3: Dosya │ Alt+C: Kopyala │ Alt+V: Görsel", id="footer-bar")
+
+                yield Label("💡 İpucu: Fareyle metin kopyalamak için: Shift + Sol Tık Sürükle │ F1: Yeni │ F2: Model │ F3: Dosya │ Alt+C: Kopyala │ Alt+V: Görsel", id="footer-bar")
 
     def on_mount(self) -> None:
         if self.all_chats_cache:
@@ -547,6 +555,12 @@ class NakedGeminiTUI(App):
         
         # YÖNTEM A: Saf HTTP Heartbeat Motoru
         self._heartbeat_task = asyncio.create_task(self.start_http_heartbeat_loop())
+
+        # Girdi alanını doğrudan odakla
+        try:
+            self.query_one("#prompt-text-area", PromptTextArea).focus()
+        except Exception:
+            pass
 
     # --- PROMPT SUBMIT HANDLER (ENTER VEYA GÖNDER BUTTON) ---
     def handle_prompt_submit(self) -> None:
@@ -600,7 +614,7 @@ class NakedGeminiTUI(App):
             if clean_path.exists():
                 self.attached_files.append(str(clean_path))
                 self.update_attachments_bar()
-                chat_log = self.query_one("#chat-log", RichRichLog if False else RichLog)
+                chat_log = self.query_one("#chat-log", RichLog)
                 chat_log.write(Markdown(f"📎 **Dosya eklendi:** `{clean_path.name}` (`{clean_path}`)"))
                 chat_log.write("\n")
                 chat_log.scroll_end(animate=False)
