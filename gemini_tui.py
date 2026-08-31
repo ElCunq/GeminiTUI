@@ -36,34 +36,64 @@ try:
 except Exception:
     pass
 
-# Lokal cache dizinleri
-CACHE_DIR = pathlib.Path.home() / ".cache" / "gemini_tui"
+# Lokal cache ve konfigürasyon dizinleri
+CACHE_DIR = Path.home() / ".cache" / "gemini_tui"
 CACHE_FILE = CACHE_DIR / "chats_cache.json"
-PROJECTS_FILE = CACHE_DIR / "projects_cache.json"
 IMAGES_DIR = CACHE_DIR / "images"
 
-# Kullanılabilir Slash Komutları
+CONFIG_DIR = Path.home() / ".config" / "gemini_tui"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+# Temiz, Saf Chatbot Komut Listesi
 COMMANDS_LIST = [
     ("/help", "Kullanım yardımını ve komut listesini gösterir"),
     ("/new", "Yeni temiz bir sohbet başlatır"),
-    ("/project <isim>", "Yeni proje oluşturur veya var olana geçiş yapar"),
     ("/model", "AI modelleri arasında geçiş yapar (3.7 Flash, 3.1 Pro, 3.5 Flash-Lite)"),
-    ("! <komut>", "Terminal shell komutunu çalıştırır ve çıktısını Gemini'a analiz ettirir"),
-    ("/view [dosya]", "Son üretilen görseli veya belirtilen resmi mpv/full-hd penceresinde açar"),
-    ("/copy", "En son verilen yanıtın tamamını panoya kopyalar (Alt+C)"),
-    ("/copycode", "En son verilen yanıt içindeki SADECE KOD bloklarını kopyalar"),
-    ("/export <dosya>", "Aktif sohbeti Markdown (.md) dosyası olarak kaydeder"),
-    ("/import <dosya>", "Kaydedilmiş sohbet dosyasını geri yükler ve devam ettirir"),
-    ("/file <yol>", "Görsel (PNG/JPG/WEBP), PDF veya metin/kod dosyası ekler (F3/Alt+F)"),
-    ("/retry", "En son gönderilen mesajı yeniden yanıtlatır"),
+    ("/file <yol>", "Görsel (PNG/JPG/WEBP), PDF veya kod/metin dosyası ekler (F3/Alt+F)"),
+    ("/view", "Son üretilen görseli mpv ile tam çözünürlükte açar (Alt+V)"),
+    ("/copy", "En son verilen yanıtı panoya kopyalar (Alt+C)"),
     ("/rename <başlık>", "Aktif sohbetin başlığını değiştirir"),
     ("/pin", "Sohbeti sol panele iğneler veya iğneyi kaldırır (📌)"),
-    ("/delete", "Aktif sohbeti Google hesabınızdan siler"),
-    ("/thinking", "Derin Düşünme (Extended Thinking) modunu açar/kapatır"),
-    ("/research", "Derin Araştırma (Deep Research) modunu açar/kapatır"),
+    ("/delete", "Aktif sohbeti hesabınızdan siler (F4/Alt+D)"),
+    ("/login <1PSID> <1PSIDTS>", "Hesap çerezlerini kaydedip oturum açar"),
     ("/clear", "Eklenmiş dosyaları temizler"),
     ("/exit", "Uygulamadan çıkış yapar"),
 ]
+
+def load_cookie_credentials():
+    psid = os.getenv("GEMINI_1PSID", None)
+    psidts = os.getenv("GEMINI_1PSIDTS", None)
+    psidcc = os.getenv("GEMINI_1PSIDCC", None)
+    
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if not psid:
+                    psid = data.get("GEMINI_1PSID") or data.get("1PSID")
+                if not psidts:
+                    psidts = data.get("GEMINI_1PSIDTS") or data.get("1PSIDTS")
+                if not psidcc:
+                    psidcc = data.get("GEMINI_1PSIDCC") or data.get("1PSIDCC")
+        except Exception:
+            pass
+            
+    return psid, psidts, psidcc
+
+def save_cookie_credentials(psid: str, psidts: str, psidcc: Optional[str] = None):
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        data = {
+            "GEMINI_1PSID": psid.strip(),
+            "GEMINI_1PSIDTS": psidts.strip()
+        }
+        if psidcc:
+            data["GEMINI_1PSIDCC"] = psidcc.strip()
+            
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 class NakedGeminiTUI(App):
     BINDINGS = [
@@ -77,13 +107,9 @@ class NakedGeminiTUI(App):
         Binding("f4", "action_delete_chat", "Sohbeti Sil", priority=True),
         Binding("alt+d", "action_delete_chat", "Sohbeti Sil", priority=True),
         Binding("alt+c", "action_copy_last_response", "Yanıtı Kopyala", priority=True),
-        Binding("f5", "action_toggle_thinking", "Düşünme Modu", priority=True),
-        Binding("alt+t", "action_toggle_thinking", "Düşünme Modu", priority=True),
-        Binding("f6", "action_toggle_research", "Araştırma Modu", priority=True),
-        Binding("alt+r", "action_toggle_research", "Araştırma Modu", priority=True),
+        Binding("alt+v", "action_open_last_generated_image", "Görseli Aç", priority=True),
         Binding("f7", "action_show_help", "Yardım", priority=True),
         Binding("alt+h", "action_show_help", "Yardım", priority=True),
-        Binding("alt+v", "action_open_last_generated_image", "Görseli Aç", priority=True),
     ]
 
     CSS = """
@@ -110,19 +136,16 @@ class NakedGeminiTUI(App):
         border-right: solid #555555; 
         padding: 0 1; 
     }
-    #sidebar-header-proj {
-        color: #aaaaaa;
+    #new-chat-btn {
+        height: 1;
+        margin-bottom: 1;
+        color: #00ffcc;
         text-style: bold;
+        border-bottom: solid #333333;
     }
     #sidebar-header-chat {
         color: #aaaaaa;
         text-style: bold;
-        margin-top: 1;
-    }
-    #project-list {
-        height: 6;
-        border-bottom: solid #333333;
-        margin-bottom: 1;
     }
     #search-input {
         height: 1;
@@ -198,12 +221,7 @@ class NakedGeminiTUI(App):
         self.active_model_idx: int = 0
         
         self.attached_files: List[str] = []
-        self.extended_thinking: bool = False
-        self.deep_research: bool = False
         self.all_chats_cache: List[Dict[str, Any]] = []
-        
-        self.projects_list: List[str] = ["Genel", "Yazılım Projesi", "Kişisel / Notlar"]
-        self.active_project_name: str = "Genel"
         
         self.last_user_prompt: str = ""
         self.last_gemini_response: str = ""
@@ -211,15 +229,13 @@ class NakedGeminiTUI(App):
         self._search_task: Optional[asyncio.Task] = None
 
         self.load_local_cache()
-        self.load_projects_cache()
 
     def compose(self) -> ComposeResult:
-        yield Label("⚡ Gemini TUI │ Yükleniyor...", id="header-bar")
+        yield Label("⚡ Gemini TUI │ Oturum açılıyor...", id="header-bar")
         
         with Horizontal(id="body-container"):
             with Vertical(id="sidebar"):
-                yield Label("📁 PROJELER\n", id="sidebar-header-proj")
-                yield ListView(id="project-list")
+                yield Label("✨ + Yeni Sohbet (F1)", id="new-chat-btn")
                 yield Label("💬 GEÇMİŞ SOHBETLER\n", id="sidebar-header-chat")
                 yield Input(placeholder="🔍 Sohbet ara...", id="search-input")
                 yield ListView(id="chat-list")
@@ -229,13 +245,11 @@ class NakedGeminiTUI(App):
                 yield ListView(id="command-suggestions")
                 yield Label("💬 Sohbet: Yeni Sohbet  │  ⚡ Model: 3.7 Flash", id="chat-info-bar")
                 yield Label("", id="attachments-bar")
-                yield Input(placeholder="Mesajınız, komut (/), dosya ekle (/file) veya terminal komutu (!ls)...", id="message-input")
+                yield Input(placeholder="Mesajınız veya komut (/)...", id="message-input")
                 
-        yield Label("F1: Yeni │ F2: Model │ F3: Dosya │ F4: Sil │ Alt+C: Kopyala │ Alt+V: Görseli Aç │ F5: Düşünme │ F6: Araştırma │ F7: Yardım", id="footer-bar")
+        yield Label("F1: Yeni │ F2: Model │ F3: Dosya │ F4: Sil │ Alt+C: Kopyala │ Alt+V: Görseli Aç │ F7: Yardım", id="footer-bar")
 
     def on_mount(self) -> None:
-        self.render_project_list()
-        
         if self.all_chats_cache:
             asyncio.create_task(self.render_chat_list(self.all_chats_cache))
             
@@ -243,7 +257,7 @@ class NakedGeminiTUI(App):
         self.update_chat_info_bar()
         self.connect_to_gemini()
 
-    # --- SOHBET İÇİ YARIM-BLOK (HALF-BLOCK ▀) RENDER EDİCİ ---
+    # --- 2 KAT YÜKSEK ÇÖZÜNÜRLÜKLÜ SOHBET İÇİ YARIM-BLOK (HALF-BLOCK ▀) RENDER EDİCİ ---
     def render_image_in_chat(self, img_path_str: str, max_width: int = 85) -> Optional[Text]:
         if not PILImage:
             return None
@@ -270,7 +284,6 @@ class NakedGeminiTUI(App):
         except Exception:
             return None
 
-    # --- İSTEĞE BAĞLI OTO/KULLANICI TETİKLEMELİ POPUP GÖRÜNTÜLEYİCİ ---
     def action_open_last_generated_image(self, custom_path: Optional[str] = None) -> None:
         target_path = custom_path or self.last_generated_image_path
         chat_log = self.query_one("#chat-log", RichLog)
@@ -286,7 +299,7 @@ class NakedGeminiTUI(App):
                 subprocess.Popen(["mpv", "--title=Gemini Üretilen Görsel (FullHD)", str(target_path)])
             elif shutil.which("xdg-open"):
                 subprocess.Popen(["xdg-open", str(target_path)])
-            chat_log.write(Markdown(f"🔍 **Görsel FullHD pencerede açıldı:** `{Path(target_path).name}`"))
+            chat_log.write(Markdown(f"🔍 **Görsel pencerede açıldı:** `{Path(target_path).name}`"))
             chat_log.write("\n")
         except Exception as e:
             chat_log.write(Markdown(f"⚠️ **Görsel açma hatası:** `{str(e)}`"))
@@ -306,48 +319,6 @@ class NakedGeminiTUI(App):
             except Exception:
                 pass
 
-    # --- CLIENT-SIDE PROJELER LİSTESİNİ ÇİZDİRME ---
-    def render_project_list(self) -> None:
-        if not self.is_mounted:
-            return
-        try:
-            p_list = self.query_one("#project-list", ListView)
-        except Exception:
-            return
-            
-        p_list.clear()
-        items = []
-        for name in self.projects_list:
-            prefix = "[bold green]▶ [/bold green]" if name == self.active_project_name else "  "
-            item = ListItem(Label(f"{prefix}📁 {name}"))
-            item.project_name = name
-            items.append(item)
-            
-        if items and p_list.is_mounted:
-            p_list.mount(*items)
-
-    def load_projects_cache(self) -> None:
-        try:
-            if PROJECTS_FILE.exists():
-                with open(PROJECTS_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.projects_list = data.get("projects", self.projects_list)
-                    self.active_project_name = data.get("active_project", self.active_project_name)
-        except Exception:
-            pass
-
-    def save_projects_cache(self) -> None:
-        try:
-            CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            with open(PROJECTS_FILE, "w", encoding="utf-8") as f:
-                json.dump({
-                    "projects": self.projects_list,
-                    "active_project": self.active_project_name
-                }, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-
-    # --- VARSAYILAN MODELİ 3.7 FLASH YAPAN YARDIMCI METOT ---
     def select_default_model_flash_37(self) -> None:
         if not self.available_models:
             return
@@ -390,7 +361,6 @@ class NakedGeminiTUI(App):
         except Exception:
             pass
 
-    # --- GİRDİ KUTUSU ÜSTÜNDEKİ SABİT ÇERÇEVELİ SOHBET VE MODEL BARI ---
     def update_chat_info_bar(self) -> None:
         bar = self.query_one("#chat-info-bar", Label)
         
@@ -399,32 +369,21 @@ class NakedGeminiTUI(App):
             chat_title = chat_title[:32] + "..."
 
         model_name = self.get_current_model_display_name()
-        proj_str = f"  │  📁 Proje: [bold yellow]{self.active_project_name}[/bold yellow]"
-
-        bar.update(f"💬 Sohbet: [bold white]{chat_title}[/bold white]  │  ⚡ Model: [bold green]{model_name}[/bold green]{proj_str}")
+        bar.update(f"💬 Sohbet: [bold white]{chat_title}[/bold white]  │  ⚡ Model: [bold green]{model_name}[/bold green]")
 
     def update_header_status(self) -> None:
         header = self.query_one("#header-bar", Label)
-        
         model_display = self.get_current_model_display_name()
-            
-        thinking_str = "[bold green]AÇIK[/bold green]" if self.extended_thinking else "[dim]KAPALI[/dim]"
-        research_str = "[bold magenta]AÇIK[/bold magenta]" if self.deep_research else "[dim]KAPALI[/dim]"
         
-        session_status = "[bold green]🟢 Aktif[/bold green]"
+        session_status = "[bold green]🟢 Hesaba Bağlı[/bold green]"
         if self.client:
             cookie_source = getattr(self.client, "_cookie_source", "")
             if cookie_source == "Guest":
-                session_status = "[bold yellow]🟡 Misafir (Guest)[/bold yellow]"
+                session_status = "[bold yellow]🟡 Misafir Modu (Giriş Yapılmadı)[/bold yellow]"
         else:
             session_status = "[bold red]🔴 Bağlanıyor...[/bold red]"
 
-        status_text = (
-            f"⚡ [bold cyan]MODEL:[/bold cyan] [bold white underline]{model_display}[/bold white underline]  │  "
-            f"💭 [cyan]Düşünme:[/cyan] {thinking_str}  │  "
-            f"🔍 [magenta]Araştırma:[/magenta] {research_str}  │  "
-            f"Oturum: {session_status}"
-        )
+        status_text = f"⚡ [bold cyan]MODEL:[/bold cyan] [bold white underline]{model_display}[/bold white underline]  │  Oturum: {session_status}"
         header.update(status_text)
 
     def update_attachments_bar(self) -> None:
@@ -440,11 +399,20 @@ class NakedGeminiTUI(App):
     # --- GEMINI CLIENT VE ARKA PLAN BAĞLANTISI ---
     @work(exclusive=True)
     async def connect_to_gemini(self) -> None:
+        chat_log = self.query_one("#chat-log", RichLog)
         try:
-            psid = os.getenv("GEMINI_1PSID", None)
-            psidts = os.getenv("GEMINI_1PSIDTS", None)
+            psid, psidts, psidcc = load_cookie_credentials()
             
-            self.client = GeminiClient(secure_1psid=psid, secure_1psidts=psidts)
+            kwargs = {}
+            if psidcc:
+                kwargs["secure_1psidcc"] = psidcc
+                
+            self.client = GeminiClient(
+                secure_1psid=psid,
+                secure_1psidts=psidts,
+                **kwargs
+            )
+            
             await self.client.init(timeout=45, auto_close=False, auto_refresh=True)
             
             models = self.client.list_models()
@@ -454,16 +422,28 @@ class NakedGeminiTUI(App):
                     self.available_models = real_avail
             
             self.select_default_model_flash_37()
-            
             selected_model = self.available_models[self.active_model_idx] if self.available_models else None
             self.active_chat = self.client.start_chat(model=selected_model)
             
             self.update_header_status()
             self.update_chat_info_bar()
+            
+            cookie_source = getattr(self.client, "_cookie_source", "")
+            if cookie_source == "Guest":
+                chat_log.write(Markdown(
+                    "🟡 **Hesap Bağlantısı Uyarısı:** Google hesabınıza erişilemedi.\n\n"
+                    "Giriş yapmak ve geçmiş sohbetlerinize erişmek için lütfen `GEMINI_1PSID` ve `GEMINI_1PSIDTS` çerezlerinizi tanımlayın veya mesaj kutusuna yazın:\n"
+                    "`/login <GEMINI_1PSID> <GEMINI_1PSIDTS>`"
+                ))
+                chat_log.write("\n---\n")
+                chat_log.scroll_end(animate=False)
+            
             self.sync_chats_from_server_bg()
-        except Exception:
+        except Exception as e:
             self.update_header_status()
             self.update_chat_info_bar()
+            chat_log.write(Markdown(f"⚠️ **Bağlantı Kurulamadı:** `{str(e)}`"))
+            chat_log.write("\n")
 
     @work(exclusive=True, group="sync_bg")
     async def sync_chats_from_server_bg(self) -> None:
@@ -477,46 +457,44 @@ class NakedGeminiTUI(App):
             await self.render_chat_list([])
             return
 
-        await self.client._fetch_recent_chats(recent=500)
-        chats = self.client.list_chats() or []
-        
-        cache_data = []
-        for c in chats:
-            local_pin = False
-            local_title = c.title
-            local_project = "Genel"
-            for old in self.all_chats_cache:
-                if old.get("cid") == c.cid:
-                    if "is_pinned" in old:
-                        local_pin = old["is_pinned"]
-                    if old.get("title_renamed"):
-                        local_title = old["title"]
-                    if old.get("project"):
-                        local_project = old["project"]
-                    break
-
-            cache_data.append({
-                "cid": c.cid,
-                "title": local_title,
-                "is_pinned": getattr(c, "is_pinned", False) or local_pin,
-                "project": local_project,
-                "timestamp": getattr(c, "timestamp", 0.0)
-            })
+        try:
+            await self.client._fetch_recent_chats(recent=500)
+            chats = self.client.list_chats() or []
             
-        self.all_chats_cache = cache_data
-        self.save_local_cache(cache_data)
+            cache_data = []
+            for c in chats:
+                local_pin = False
+                local_title = c.title
+                for old in self.all_chats_cache:
+                    if old.get("cid") == c.cid:
+                        if "is_pinned" in old:
+                            local_pin = old["is_pinned"]
+                        if old.get("title_renamed"):
+                            local_title = old["title"]
+                        break
 
-        if self.active_chat and self.active_chat.cid:
-            for c in cache_data:
-                if c["cid"] == self.active_chat.cid and c["title"]:
-                    self.active_chat_title = c["title"]
-                    self.update_chat_info_bar()
-                    break
+                cache_data.append({
+                    "cid": c.cid,
+                    "title": local_title,
+                    "is_pinned": getattr(c, "is_pinned", False) or local_pin,
+                    "timestamp": getattr(c, "timestamp", 0.0)
+                })
+                
+            self.all_chats_cache = cache_data
+            self.save_local_cache(cache_data)
 
-        search_val = self.query_one("#search-input", Input).value
-        await self.render_chat_list(cache_data, filter_query=search_val)
+            if self.active_chat and self.active_chat.cid:
+                for c in cache_data:
+                    if c["cid"] == self.active_chat.cid and c["title"]:
+                        self.active_chat_title = c["title"]
+                        self.update_chat_info_bar()
+                        break
 
-    # ⚡ CLIENT-SIDE PROJE FİLTRELEMELİ ÇİZDİRME
+            search_val = self.query_one("#search-input", Input).value
+            await self.render_chat_list(cache_data, filter_query=search_val)
+        except Exception:
+            pass
+
     async def render_chat_list(self, chats: List[Dict[str, Any]], filter_query: str = "") -> None:
         if not self.is_mounted:
             return
@@ -532,34 +510,26 @@ class NakedGeminiTUI(App):
         try:
             await chat_list.clear()
 
-            project_filtered = [
-                c for c in chats 
-                if c.get("project", "Genel") == self.active_project_name
-            ]
-
-            try:
-                sidebar_header = self.query_one("#sidebar-header-chat", Label)
-                sidebar_header.update(f"💬 GEÇMİŞ SOHBETLER ({len(project_filtered)})\n")
-            except Exception:
-                pass
+            sidebar_header = self.query_one("#sidebar-header-chat", Label)
+            sidebar_header.update(f"💬 GEÇMİŞ SOHBETLER ({len(chats)})\n")
 
             cookie_source = getattr(self.client, "_cookie_source", "") if self.client else ""
             if cookie_source == "Guest":
-                item = ListItem(Label("> (Giriş Yapılmadı)"))
+                item = ListItem(Label("> (Misafir Modu)"))
                 item.chat_id = None
                 await chat_list.mount(item)
                 return
 
-            if not project_filtered:
-                item = ListItem(Label("> (Bu Projede Sohbet Yok)"))
+            if not chats:
+                item = ListItem(Label("> (Geçmiş Sohbet Yok)"))
                 item.chat_id = None
                 await chat_list.mount(item)
                 return
 
             filter_lower = filter_query.lower().strip()
             
-            pinned = [c for c in project_filtered if c.get("is_pinned", False)]
-            others = [c for c in project_filtered if not c.get("is_pinned", False)]
+            pinned = [c for c in chats if c.get("is_pinned", False)]
+            others = [c for c in chats if not c.get("is_pinned", False)]
             ordered = pinned + others
 
             items = []
@@ -591,7 +561,7 @@ class NakedGeminiTUI(App):
             val = event.value.strip()
             popup = self.query_one("#command-suggestions", ListView)
             
-            if val.startswith("/") or val.startswith("!"):
+            if val.startswith("/"):
                 query = val.lower()
                 asyncio.create_task(self.render_command_popup(query))
             else:
@@ -607,7 +577,7 @@ class NakedGeminiTUI(App):
 
         matching = [
             (cmd, desc) for cmd, desc in COMMANDS_LIST 
-            if query in ["/", "!"] or cmd.lower().startswith(query)
+            if query == "/" or cmd.lower().startswith(query)
         ]
 
         if matching:
@@ -680,18 +650,6 @@ class NakedGeminiTUI(App):
             self.active_chat = self.client.start_chat(cid=chat_id, model=selected_model) if self.client else None
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.list_view.id == "project-list":
-            p_name = getattr(event.item, "project_name", None)
-            if p_name:
-                self.active_project_name = p_name
-                self.render_project_list()
-                self.save_projects_cache()
-                self.update_chat_info_bar()
-                search_val = self.query_one("#search-input", Input).value
-                asyncio.create_task(self.render_chat_list(self.all_chats_cache, filter_query=search_val))
-                self.query_one("#message-input", Input).focus()
-            return
-
         if event.list_view.id == "command-suggestions":
             cmd = getattr(event.item, "command_str", None)
             if cmd:
@@ -700,14 +658,10 @@ class NakedGeminiTUI(App):
                     msg_input.value = "/file "
                 elif cmd == "/rename <başlık>":
                     msg_input.value = "/rename "
-                elif cmd == "/project <isim>":
-                    msg_input.value = "/project "
-                elif cmd in ["/import <dosya>", "/export <dosya>"]:
-                    msg_input.value = cmd.split()[0] + " "
-                elif cmd == "/view [dosya]":
-                    msg_input.value = "/view "
-                elif cmd == "! <komut>":
-                    msg_input.value = "! "
+                elif cmd == "/login <1PSID> <1PSIDTS>":
+                    msg_input.value = "/login "
+                elif cmd == "/view":
+                    msg_input.value = "/view"
                 else:
                     msg_input.value = cmd
                 msg_input.focus()
@@ -720,143 +674,6 @@ class NakedGeminiTUI(App):
                 title = getattr(event.item, "title_text", "Sohbet")
                 self.load_historical_chat(chat_id, title)
                 self.query_one("#message-input", Input).focus()
-
-    # --- SHELL KOMUT ÇALIŞTIRMA (!komut / /sh) ---
-    def action_execute_shell(self, shell_command: str) -> None:
-        chat_log = self.query_one("#chat-log", RichLog)
-        chat_log.write(Markdown(f"💻 **Shell Komutu Çalıştırılıyor:** `{shell_command}`"))
-        chat_log.write("\n")
-        chat_log.scroll_end(animate=False)
-        
-        asyncio.create_task(self._do_execute_shell(shell_command))
-
-    async def _do_execute_shell(self, shell_command: str) -> None:
-        chat_log = self.query_one("#chat-log", RichLog)
-        try:
-            res = await asyncio.to_thread(
-                subprocess.run,
-                shell_command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            output = (res.stdout + res.stderr).strip()
-            if not output:
-                output = "(Komut başarılı şekilde çalıştırıldı, çıktı vermedi.)"
-                
-            code_block = f"```text\n{output}\n```"
-            chat_log.write(Markdown(code_block))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
-            
-            prompt_payload = (
-                f"Aşağıdaki terminal komutunu ve çıktısını analiz et, gerekiyorsa açıkla veya tavsiyede bulun:\n\n"
-                f"**Komut:** `{shell_command}`\n\n"
-                f"**Çıktı:**\n{code_block}"
-            )
-            
-            if self.active_chat:
-                self.send_message_to_gemini(prompt_payload)
-        except Exception as e:
-            chat_log.write(Markdown(f"⚠️ **Komut çalıştırma hatası:** `{str(e)}`"))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
-
-    # --- CLIENT-SIDE PROJE OLUŞTURMA & GEÇİŞ (`/project <isim>`) ---
-    def action_switch_or_create_project(self, proj_name: str) -> None:
-        if not proj_name:
-            return
-        clean_name = proj_name.strip()
-        if clean_name not in self.projects_list:
-            self.projects_list.append(clean_name)
-            
-        self.active_project_name = clean_name
-        self.render_project_list()
-        self.save_projects_cache()
-        self.update_chat_info_bar()
-        
-        search_val = self.query_one("#search-input", Input).value
-        asyncio.create_task(self.render_chat_list(self.all_chats_cache, filter_query=search_val))
-        
-        chat_log = self.query_one("#chat-log", RichLog)
-        chat_log.write(Markdown(f"📁 **Aktif Proje Değiştirildi:** `{clean_name}`"))
-        chat_log.write("\n")
-        chat_log.scroll_end(animate=False)
-
-    # --- SOHBET DOSYASI İÇE AKTARMA (/import) ---
-    def action_import_chat(self, filepath_str: str) -> None:
-        chat_log = self.query_one("#chat-log", RichLog)
-        if not filepath_str:
-            chat_log.write(Markdown("⚠️ **Lütfen bir dosya yolu belirtin:** `/import sohbet_dosyasi.md`"))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
-            return
-
-        import_path = Path(filepath_str).expanduser()
-        if not import_path.exists():
-            chat_log.write(Markdown(f"⚠️ **Dosya bulunamadı:** `{filepath_str}`"))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
-            return
-
-        asyncio.create_task(self._do_import_file(import_path))
-
-    async def _do_import_file(self, import_path: Path) -> None:
-        chat_log = self.query_one("#chat-log", RichLog)
-        try:
-            with open(import_path, "r", encoding="utf-8") as f:
-                content = f.read()
-
-            sections = re.split(r'### (👤 Sen|🤖 Gemini)\n\n', content)
-            imported_turns = []
-            for i in range(1, len(sections), 2):
-                role_raw = sections[i]
-                text = sections[i+1].split('\n\n---\n\n')[0].strip()
-                role = "user" if "Sen" in role_raw else "model"
-                imported_turns.append((role, text))
-
-            if not imported_turns:
-                chat_log.write(Markdown("⚠️ **Dosya içerisinde geçerli sohbet turu bulunamadı.**"))
-                chat_log.write("\n")
-                chat_log.scroll_end(animate=False)
-                return
-
-            selected_model = self.available_models[self.active_model_idx] if self.available_models else None
-            self.active_chat = self.client.start_chat(model=selected_model) if self.client else None
-            self.active_chat_title = f"İçeri Aktarıldı: {import_path.stem}"
-            self.update_chat_info_bar()
-
-            chat_log.clear()
-            chat_log.write(Markdown(f"📥 **Sohbet dosyası içeri aktarıldı:** `{import_path.name}` ({len(imported_turns)} mesaj)"))
-            chat_log.write("\n---\n")
-
-            history_summary = []
-            for role, text in imported_turns:
-                if role == "user":
-                    chat_log.write(Markdown(f"**Sen:** {text}"))
-                    chat_log.write("\n")
-                    history_summary.append(f"User: {text}")
-                else:
-                    self.last_gemini_response = text
-                    chat_log.write(Text("Gemini:", style="bold green"))
-                    chat_log.write(Markdown(text))
-                    chat_log.write("\n---\n")
-                    history_summary.append(f"Gemini: {text}")
-
-            chat_log.scroll_end(animate=False)
-
-            if self.active_chat:
-                context_prompt = (
-                    f"[Sohbet Geçmişi İçe Aktarıldı - Lütfen aşağıdaki sohbet geçmişini dikkate alarak devam et]:\n\n"
-                    + "\n\n".join(history_summary[-6:])
-                )
-                asyncio.create_task(self.active_chat.send_message(context_prompt))
-
-        except Exception as e:
-            chat_log.write(Markdown(f"⚠️ **İçeri aktarma hatası:** `{str(e)}`"))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
 
     # --- PANOYA KOPYALAMA (Alt+C / /copy) ---
     def action_copy_last_response(self) -> None:
@@ -890,93 +707,6 @@ class NakedGeminiTUI(App):
             chat_log.write("\n")
         else:
             chat_log.write(Markdown("⚠️ **Panoya kopyalama başarısız (wl-copy / xclip bulunamadı).**"))
-            chat_log.write("\n")
-        chat_log.scroll_end(animate=False)
-
-    # --- SADECE KOD BLOKLARINI KOPYALAMA (/copycode) ---
-    def action_copy_code_blocks(self) -> None:
-        chat_log = self.query_one("#chat-log", RichLog)
-        if not self.last_gemini_response:
-            chat_log.write(Markdown("⚠️ **Kopyalanacak yanıt bulunamadı.**"))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
-            return
-
-        code_blocks = re.findall(r"```(?:\w+)?\n(.*?)```", self.last_gemini_response, re.DOTALL)
-        if not code_blocks:
-            chat_log.write(Markdown("⚠️ **Yanıt içerisinde kod bloğu bulunamadı.**"))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
-            return
-
-        code_text = "\n\n".join(cb.strip() for cb in code_blocks)
-        success = False
-        if shutil.which("wl-copy"):
-            try:
-                p = subprocess.Popen(["wl-copy"], stdin=subprocess.PIPE)
-                p.communicate(input=code_text.encode("utf-8"))
-                success = True
-            except Exception:
-                pass
-        elif shutil.which("xclip"):
-            try:
-                p = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
-                p.communicate(input=code_text.encode("utf-8"))
-                success = True
-            except Exception:
-                pass
-
-        if success:
-            chat_log.write(Markdown(f"📋 **{len(code_blocks)} adet kod bloğu panoya kopyalandı!**"))
-            chat_log.write("\n")
-        else:
-            chat_log.write(Markdown("⚠️ **Panoya kopyalama başarısız (wl-copy / xclip bulunamadı).**"))
-            chat_log.write("\n")
-        chat_log.scroll_end(animate=False)
-
-    # --- SOHBETİ DISA AKTARMA (/export) ---
-    def action_export_chat(self, filename: str = "") -> None:
-        chat_log = self.query_one("#chat-log", RichLog)
-        if not self.active_chat or not self.active_chat.cid:
-            chat_log.write(Markdown("⚠️ **Dışa aktarılacak kayıtlı sohbet bulunamadı.**"))
-            chat_log.write("\n")
-            chat_log.scroll_end(animate=False)
-            return
-
-        if not filename:
-            now_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            clean_title = "".join(c if c.isalnum() else "_" for c in self.active_chat_title)[:25]
-            filename = f"Gemini_Sohbet_{clean_title}_{now_str}.md"
-
-        export_path = Path.cwd() / filename
-        asyncio.create_task(self._do_export_file(export_path))
-
-    async def _do_export_file(self, export_path: Path) -> None:
-        chat_log = self.query_one("#chat-log", RichLog)
-        try:
-            cid = self.active_chat.cid
-            history = await self.client.read_chat(cid, limit=150) if self.client else None
-            
-            content = f"# 🤖 Gemini TUI Sohbet Raporu\n"
-            content += f"- **Başlık:** {self.active_chat_title}\n"
-            content += f"- **Model:** {self.get_current_model_display_name()}\n"
-            content += f"- **Proje:** {self.active_project_name}\n"
-            content += f"- **Tarih:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            content += f"- **Sohbet ID:** `{cid}`\n\n"
-            content += "---\n\n"
-            
-            if history and history.turns:
-                for turn in reversed(history.turns):
-                    role_name = "👤 Sen" if turn.role == "user" else "🤖 Gemini"
-                    content += f"### {role_name}\n\n{turn.text}\n\n---\n\n"
-                    
-            with open(export_path, "w", encoding="utf-8") as f:
-                f.write(content)
-                
-            chat_log.write(Markdown(f"💾 **Sohbet dışa aktarıldı:** `{export_path.name}`"))
-            chat_log.write("\n")
-        except Exception as e:
-            chat_log.write(Markdown(f"⚠️ **Dışa aktarma hatası:** `{str(e)}`"))
             chat_log.write("\n")
         chat_log.scroll_end(animate=False)
 
@@ -1072,14 +802,6 @@ class NakedGeminiTUI(App):
         except Exception:
             pass
 
-    def action_toggle_thinking(self) -> None:
-        self.extended_thinking = not self.extended_thinking
-        self.update_header_status()
-
-    def action_toggle_research(self) -> None:
-        self.deep_research = not self.deep_research
-        self.update_header_status()
-
     def action_show_help(self) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
         help_md = (
@@ -1087,18 +809,11 @@ class NakedGeminiTUI(App):
             "- **F1** veya **Alt+N** veya `/new` : Yeni sohbet başlatır.\n"
             "- **F2** veya **Alt+M** veya `/model` : AI Modelleri arasında geçiş yapar.\n"
             "- **F3** veya **Alt+F** veya `/file <yol>` : Görsel (PNG/JPG/WEBP), PDF veya metin dosyası ekler.\n"
-            "- **! <komut>** veya `/sh <komut>` : Terminal komutunu çalıştırır ve Gemini'a analiz ettirir.\n"
-            "- `/project <isim>` : Yeni proje oluşturur veya var olan projeye geçiş yapar.\n"
-            "- **Alt+V** veya `/view [dosya]` : Üretilen görseli mpv ile tam çözünürlükte açar.\n"
             "- **F4** veya **Alt+D** veya `/delete` : Aktif sohbeti hesabınızdan siler.\n"
             "- **Alt+C** veya `/copy` : En son verilen yanıtı panoya kopyalar.\n"
-            "- `/copycode` : Yanıt içindeki sadece KOD bloklarını panoya kopyalar.\n"
-            "- **F5** veya **Alt+T** veya `/thinking` : Derin Düşünme modunu açar/kapatır.\n"
-            "- **F6** veya **Alt+R** veya `/research` : Derin Araştırma modunu açar/kapatır.\n"
+            "- **Alt+V** veya `/view` : Üretilen görseli mpv ile tam çözünürlükte açar.\n"
+            "- `/login <1PSID> <1PSIDTS>` : Hesap çerezlerini kaydedip yeniden bağlanır.\n"
             "- **F7** veya **Alt+H** veya `/help` : Yardım menüsünü gösterir.\n"
-            "- `/export <dosya>` : Sohbeti Markdown (.md) olarak kaydeder.\n"
-            "- `/import <dosya>` : Kaydedilmiş sohbet dosyasını yükler ve bağlamla devam eder.\n"
-            "- `/retry` : Son mesajı yeniden yanıtlatır (Yukarı Ok ile çağırabilirsiniz).\n"
             "- `/pin` : Sohbeti iğneler/iğneyi kaldırır (📌).\n"
             "- `/rename <başlık>` : Sohbetin adını değiştirir.\n"
             "- `/clear` : Eklenmiş dosyaları temizler.\n"
@@ -1120,21 +835,23 @@ class NakedGeminiTUI(App):
         self.query_one("#message-input", Input).value = ""
         self.query_one("#command-suggestions", ListView).display = False
 
-        if text.startswith("!"):
-            sh_cmd = text[1:].strip()
-            if sh_cmd:
-                self.action_execute_shell(sh_cmd)
-                return
-
-        if text.startswith("/sh "):
-            sh_cmd = text.split(" ", 1)[1].strip()
-            if sh_cmd:
-                self.action_execute_shell(sh_cmd)
-                return
-
-        if text.startswith("/project "):
-            pname = text.split(" ", 1)[1].strip()
-            self.action_switch_or_create_project(pname)
+        if text.startswith("/login "):
+            parts = text.split()
+            if len(parts) >= 3:
+                p_id = parts[1].strip()
+                p_ts = parts[2].strip()
+                p_cc = parts[3].strip() if len(parts) >= 4 else None
+                save_cookie_credentials(p_id, p_ts, p_cc)
+                chat_log = self.query_one("#chat-log", RichLog)
+                chat_log.write(Markdown("🔑 **Çerezler kaydedildi! Google hesabına yeniden bağlanılıyor...**"))
+                chat_log.write("\n")
+                chat_log.scroll_end(animate=False)
+                self.connect_to_gemini()
+            else:
+                chat_log = self.query_one("#chat-log", RichLog)
+                chat_log.write(Markdown("⚠️ **Kullanım:** `/login <GEMINI_1PSID> <GEMINI_1PSIDTS>`"))
+                chat_log.write("\n")
+                chat_log.scroll_end(animate=False)
             return
 
         if text.startswith("/view"):
@@ -1160,34 +877,9 @@ class NakedGeminiTUI(App):
                 chat_log.scroll_end(animate=False)
             return
 
-        if text.startswith("/import "):
-            fpath = text.split(" ", 1)[1].strip()
-            self.action_import_chat(fpath)
-            return
-
         if text == "/copy":
             self.action_copy_last_response()
             return
-
-        if text == "/copycode":
-            self.action_copy_code_blocks()
-            return
-
-        if text.startswith("/export") or text.startswith("/save"):
-            parts = text.split(" ", 1)
-            fname = parts[1].strip() if len(parts) > 1 else ""
-            self.action_export_chat(fname)
-            return
-
-        if text == "/retry":
-            if self.last_user_prompt:
-                text = self.last_user_prompt
-            else:
-                chat_log = self.query_one("#chat-log", RichLog)
-                chat_log.write(Markdown("⚠️ **Yeniden gönderilecek mesaj bulunamadı.**"))
-                chat_log.write("\n")
-                chat_log.scroll_end(animate=False)
-                return
 
         if text == "/pin":
             self.action_pin_chat()
@@ -1231,14 +923,6 @@ class NakedGeminiTUI(App):
             self.action_delete_chat()
             return
 
-        if text == "/thinking":
-            self.action_toggle_thinking()
-            return
-
-        if text == "/research":
-            self.action_toggle_research()
-            return
-
         if text in ["/help", "/yardim"]:
             self.action_show_help()
             return
@@ -1267,16 +951,9 @@ class NakedGeminiTUI(App):
         self.attached_files.clear()
         self.update_attachments_bar()
 
-        if self.active_chat and self.active_chat.cid:
-            for c in self.all_chats_cache:
-                if c.get("cid") == self.active_chat.cid:
-                    c["project"] = self.active_project_name
-                    break
-            self.save_local_cache(self.all_chats_cache)
-        
         self.send_message_to_gemini(text, files=files_to_send)
 
-    # ⚡ İMAGEN 3 İKİ YÖNLÜ (SOHBET İÇİ RENDER + İSTEĞE BAĞLI /view VEYA Alt+V KISAYOLU)
+    # ⚡ TEMİZ AKICI MESAJLAŞMA MOTORU
     @work(exclusive=True)
     async def send_message_to_gemini(self, message: str, files: Optional[List[str]] = None) -> None:
         chat_log = self.query_one("#chat-log", RichLog)
@@ -1288,9 +965,7 @@ class NakedGeminiTUI(App):
             
             async for chunk in self.active_chat.send_message_stream(
                 prompt=message,
-                files=files,
-                extended_thinking=self.extended_thinking,
-                deep_research=self.deep_research,
+                files=files
             ):
                 if chunk:
                     last_chunk_obj = chunk
@@ -1315,7 +990,6 @@ class NakedGeminiTUI(App):
                         sources_md += f"- [{t_str}]({u_str})\n"
                     chat_log.write(Markdown(sources_md))
 
-                # ⚡ İKİ YÖNLÜ (SOHBET İÇİ ANSI RENDER + İSTEĞE BAĞLI İKİNCİ YOL KISAYOLU)
                 if last_chunk_obj and hasattr(last_chunk_obj, "images") and last_chunk_obj.images:
                     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
                     for img in last_chunk_obj.images:
@@ -1323,8 +997,7 @@ class NakedGeminiTUI(App):
                             saved_file = await img.save(path=str(IMAGES_DIR))
                             self.last_generated_image_path = saved_file
                             
-                            # 1. YOL: Sohbet İçerisinde Otomatik Göster (Otomatik Pencere Açılmaz!)
-                            chat_log.write(Markdown(f"🖼️ **Görsel Üretildi:** `{saved_file}`  *(🔍 Tam çözünürlük için: **Alt+V** veya `/view`)*"))
+                            chat_log.write(Markdown(f"🖼️ **Görsel Üretildi:** `{saved_file}`  *(🔍 Tam çözünürlük: **Alt+V** / `/view`)*"))
                             
                             ansi_img_text = self.render_image_in_chat(saved_file, max_width=85)
                             if ansi_img_text:
@@ -1339,11 +1012,9 @@ class NakedGeminiTUI(App):
             if self.active_chat and self.active_chat.cid:
                 for c in self.all_chats_cache:
                     if c.get("cid") == self.active_chat.cid:
-                        c["project"] = self.active_project_name
                         is_new_chat = False
                         break
                         
-            self.save_local_cache(self.all_chats_cache)
             if is_new_chat:
                 self.sync_chats_from_server_bg()
             
