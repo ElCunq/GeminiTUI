@@ -368,7 +368,7 @@ class NakedGeminiTUI(App):
         scrollbar-size: 1 1; 
     }
     
-    /* AÇILIR MENÜLER VE POPUP'LAR */
+    /* AÇILIR POPUP MENÜLER (FLOAT OVERLAY) */
     #top-dropdown-menu {
         height: 5;
         width: 32;
@@ -379,12 +379,14 @@ class NakedGeminiTUI(App):
         margin-top: 1;
     }
     #model-dropdown-menu {
-        height: 5;
-        width: 30;
-        border: solid #00ffcc;
+        height: 8;
+        width: 38;
+        dock: bottom;
+        margin-bottom: 5;
+        margin-right: 15;
+        border: double #00ffcc;
         background: #111111;
         display: none;
-        margin-bottom: 1;
     }
     #command-suggestions {
         height: 7;
@@ -424,7 +426,7 @@ class NakedGeminiTUI(App):
         margin-bottom: 1;
     }
 
-    /* ALT GİRDİ ÇUBUĞU (INPUT BAR - FERAH 4 SATIR + ALT MARJİN) */
+    /* ALT GİRDİ ÇUBUĞU (INPUT BAR) */
     #input-container {
         height: 4;
         layout: horizontal;
@@ -432,7 +434,7 @@ class NakedGeminiTUI(App):
         margin-bottom: 1;
         padding: 0;
     }
-    #add-file-btn, #model-select-btn, #voice-btn, #send-stop-btn {
+    #add-file-btn, #model-select-btn, #send-stop-btn {
         height: 100%;
         content-align: center middle;
     }
@@ -463,10 +465,6 @@ class NakedGeminiTUI(App):
         width: 14;
         color: #00ffcc;
         text-style: bold;
-    }
-    #voice-btn {
-        width: 5;
-        color: #ffaa00;
     }
     #send-stop-btn {
         width: 14;
@@ -560,7 +558,6 @@ class NakedGeminiTUI(App):
                     ta.cursor_blink = True
                     yield ta
                     yield Button("[Flash ▾]", id="model-select-btn")
-                    yield Button("[🎙️]", id="voice-btn")
                     yield Button("[ Gönder ⏎ ]", id="send-stop-btn")
 
                 yield Label("💡 İpucu: Alt satıra geçmek için: Shift+Enter / Alt+Enter / ' \\ ' + Enter │ Metin Seçme: Shift + Sol Tık Sürükle", id="footer-bar")
